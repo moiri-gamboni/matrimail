@@ -947,14 +947,17 @@ the key out of the data directory that holds the database and the salt.`,
 		// without re-encrypting the rows it protects, so the next restart could
 		// no longer decrypt any stored credential -- while the reply claimed
 		// "existing email accounts will continue to work". `generate` also
-		// printed the passphrase -- the sole input to key derivation -- into
-		// the Matrix room,
-		// where it lands in the homeserver's event store and every device cache.
-		// Rotation that does not re-encrypt is deletion with extra steps.
+		// printed the passphrase, the sole input to key derivation, into the
+		// Matrix room, where it lands in the homeserver's event store and every
+		// device cache. Changing the passphrase without re-encrypting is
+		// equivalent to deleting every stored credential.
 		ce.Reply("❌ `%s` has been removed: it overwrote the encryption passphrase "+
 			"without re-encrypting stored credentials, which silently destroyed them "+
-			"at the next restart. Set MATRIMAIL_PASSPHRASE in the service environment "+
-			"instead, and re-add accounts if the key is ever genuinely lost.", command)
+			"at the next restart. To use a passphrase you choose, set "+
+			"MATRIMAIL_PASSPHRASE in the service environment before adding accounts. "+
+			"Changing it afterwards has the same effect these commands had: stored "+
+			"credentials can no longer be decrypted, and each account has to be "+
+			"logged in again.", command)
 
 	default:
 		ce.Reply("❌ Unknown command: %s\n\n**Available commands:**\n• `show-location` - Show passphrase file location", command)
