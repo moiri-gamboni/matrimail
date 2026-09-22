@@ -202,9 +202,6 @@ func (ec *EmailConnector) Init(bridge *bridgev2.Bridge) {
 		bridge.Log.Error().Err(err).Msg("Encryption passphrase does not match the stored credentials. Restore the previous passphrase and restart.")
 		panic(fmt.Errorf("passphrase does not match stored credentials: %w", err))
 	}
-	if _, err := bridge.DB.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_messages_network_remote ON messages(network, remote_id)`); err == nil {
-		bridge.Log.Trace().Msg("Ensured index idx_messages_network_remote on messages(network, remote_id)")
-	}
 
 	// Initialize managers
 	logger := bridge.Log.With().Str("component", "imap").Logger()
