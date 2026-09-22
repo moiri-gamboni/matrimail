@@ -60,15 +60,15 @@ type EmailLoginProcess struct {
 	// Cancel() and from the success path. pkceVerifier and state are
 	// generated once at oauth_email-step entry and consumed when exchanging
 	// the code. scopeMode controls which scope set the auth URL requested.
-	listener      *OAuthListener
-	pkceVerifier  string
-	state         string
-	scopeMode     string // ScopeModeModify (default) or ScopeModeFull
+	listener     *OAuthListener
+	pkceVerifier string
+	state        string
+	scopeMode    string // ScopeModeModify (default) or ScopeModeFull
 }
 
 var (
-	_ bridgev2.LoginProcess              = (*EmailLoginProcess)(nil)
-	_ bridgev2.LoginProcessUserInput     = (*EmailLoginProcess)(nil)
+	_ bridgev2.LoginProcess               = (*EmailLoginProcess)(nil)
+	_ bridgev2.LoginProcessUserInput      = (*EmailLoginProcess)(nil)
 	_ bridgev2.LoginProcessDisplayAndWait = (*EmailLoginProcess)(nil)
 )
 
@@ -160,8 +160,11 @@ Default mode on this bridge: **` + defaultMode + `**.
 ` + "```\nssh -L 8888:127.0.0.1:8888 user@your-bridge-host\n```" + `
 
 …and configure ` + "`gmail_oauth.listener_address: 127.0.0.1:8888`" + ` in your
-matrimail config. Or use the ` + "`!matrimail oauth paste-token`" + ` admin command
-if you can't expose a browser-reachable port at all.
+matrimail config.
+
+If you cannot expose a browser-reachable port at all, ` + "`!matrimail oauth paste-token`" + `
+is a last resort: it works, but the refresh token you type never expires,
+grants your whole mailbox, and ends up in that room's history.
 
 *Need help?* ` + "`!matrimail help`"
 }

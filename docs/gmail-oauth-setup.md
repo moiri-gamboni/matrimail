@@ -28,7 +28,16 @@ Practical answer: you create your own Google Cloud project and matrimail uses it
 ### 1.3 Configure the OAuth consent screen
 
 1. **APIs & Services → OAuth consent screen**.
-2. User Type: **External**. Click **Create**.
+2. User Type. Pick **Internal** if this Google account belongs to a Google Workspace organisation and you are only bridging addresses in that organisation. Otherwise **Internal** is not offered and you must pick **External**. The choice has consequences that are awkward to change later:
+
+   | | Internal | External |
+   |---|---|---|
+   | Who can authorise | Only accounts in your Workspace organisation | Any Google account you list as a test user |
+   | Verification by Google | Not required | Not required while in Testing, required to leave it |
+   | Refresh token lifetime | Does not expire | **Expires after 7 days while the app is in Testing**, so you re-authorise weekly |
+   | Restricted scopes (`full` mode) | Available, though an admin may need to trust the app | Require verification and a third-party security assessment |
+
+   Click **Create**.
 3. App information:
    - App name: `matrimail` (or any name you'll recognize).
    - User support email: your email.
@@ -38,7 +47,7 @@ Practical answer: you create your own Google Cloud project and matrimail uses it
 5. **Scopes** screen → **Add or remove scopes**:
    - For the **default `modify` mode** (recommended): add `https://www.googleapis.com/auth/gmail.modify` and `https://www.googleapis.com/auth/gmail.send`. Both are "sensitive" but not "restricted".
    - For **`full` mode** (advanced; only if you need IMAP semantics): add `https://mail.google.com/` instead. This is "restricted" — see the trade-offs section below.
-6. **Test users** screen → **Add users**: add every Gmail address you intend to bridge (up to 100). Without this, Google will block authorization with "Access blocked: this app's request is invalid".
+6. **Test users** screen → **Add users**: add every Gmail address you intend to bridge (up to 100). Without this, Google will block authorization with "Access blocked: this app's request is invalid". External apps only; an Internal app has no test-user list because everyone in the organisation is already allowed.
 7. **Save and continue** → **Back to dashboard**.
 
 ⚠️ Leave the publishing status as **Testing**. See the trade-offs section for what this means for your refresh-token lifetime.
@@ -102,7 +111,13 @@ Then `!matrimail login` as in 2.1; when the auth URL says `http://127.0.0.1:8888
 
 ### 2.3 True headless (no browser, no SSH)
 
-If even SSH port-forward isn't available, use the **paste-token escape hatch**:
+> **This puts a permanent full-mailbox credential into your chat history. Use 2.2 instead if you possibly can.**
+>
+> A refresh token does not expire and can mint access tokens to the whole mailbox indefinitely. Typing one into a Matrix room writes it to the homeserver's event store, to every device that syncs the room, and to any backup of either. Redacting the message afterwards does not reliably remove it from all of those copies, and on a homeserver you do not run you cannot verify that it did.
+>
+> If you have already done this, treat the token as compromised: run `!matrimail oauth revoke your@email.com` to sever it at Google, then authorise again through 2.2.
+
+If even SSH port-forward isn't available, the **paste-token escape hatch** exists:
 
 1. On a machine with a browser, run any OAuth tool that supports authorization-code + PKCE against your Cloud project's `client_id` (e.g. `oauth2l`, `mutt_oauth2.py`, `oauth-helper`). Use `https://www.googleapis.com/auth/gmail.modify` + `https://www.googleapis.com/auth/gmail.send` (or `https://mail.google.com/` for full mode).
 2. Save the resulting refresh token.

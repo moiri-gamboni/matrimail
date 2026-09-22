@@ -89,6 +89,8 @@ When a refresh token dies (revoked, password change, 7-day Testing-mode expiry),
 
 For deployments where the bridge host can't expose a loopback port to a browser even via SSH `-L`, `!matrimail oauth paste-token <email> <refresh_token>` accepts a refresh token obtained out-of-band, validates it against Google by exchanging for an access token, confirms identity via `users.getProfile`, then persists. Counterpart `!matrimail oauth revoke <email>` severs at Google + flips the local flag. Both live in `pkg/connector/commands.go` (`fnOAuth`).
 
+This path costs the user a permanent full-mailbox credential in their room history, which no redaction reliably removes. Every surface that mentions it says so: the subcommand list, the usage reply, the login instructions and `docs/gmail-oauth-setup.md`. Keep it that way if you touch any of them, and don't present it as equivalent to an SSH port-forward.
+
 When changing the login flow, search for `LoginStep` constants and the state machine in `login.go` — the bridgev2 framework drives this via `LoginProcess` callbacks, not free-form prompts.
 
 ## Code conventions
