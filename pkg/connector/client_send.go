@@ -596,10 +596,9 @@ func (ec *EmailClient) downloadMediaAsAttachment(ctx context.Context, content *e
 // latest message, quoting an unrelated one. Per-message recipients are not
 // stored anywhere, so they cannot be recovered; refusing is the only honest
 // option. Replying to our own most recent send is fine: the Last* fields still
-// describe the correct inbound to answer. Note this cannot be thread.MessageID:
-// that holds the thread's *first* message until a send overwrites it, so using
-// it would wave through a reply to the oldest message in any thread we have not
-// yet replied in -- exactly the over-share this guard exists to stop.
+// describe the correct inbound to answer. The check uses LastInboundMessageID
+// rather than MessageID because MessageID is the newest message in either
+// direction, while the Last* fields describe the newest inbound specifically.
 func checkReplyTargetResolvable(thread *email.EmailThread, replyTo *database.Message) error {
 	if thread == nil || replyTo == nil {
 		return nil
