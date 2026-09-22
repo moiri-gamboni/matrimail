@@ -55,11 +55,15 @@ func TestParseMultipartContent_NestingIsBounded(t *testing.T) {
 	// the whole assertion.
 	deep, deepBoundary := nestedMultipart(maxMultipartDepth+500, "unreachable")
 	done := make(chan struct{})
+	var deepText string
 	go func() {
 		defer close(done)
-		_, _ = p.parseMultipartContent(strings.NewReader(deep), deepBoundary)
+		deepText, _ = p.parseMultipartContent(strings.NewReader(deep), deepBoundary)
 	}()
 	<-done
+	if !strings.Contains(deepText, "not fully parsed") {
+		t.Errorf("a message we refused to parse must say so; got %q", deepText)
+	}
 }
 
 func TestParseMultipartAttachments_NestingIsBounded(t *testing.T) {
@@ -85,7 +89,12 @@ func TestParseMultipartContent_PartCountIsBounded(t *testing.T) {
 	}
 	sb.WriteString("--b--\r\n")
 	text, _ := p.parseMultipartContent(strings.NewReader(sb.String()), "b")
-	if text != "x" {
+	if !strings.HasPrefix(text, "x") {
 		t.Fatalf("expected the first text part, got %q", text)
+	}
+	// A truncated message that says nothing reads as a short one. The reader
+	// has to be told, or the limit trades a crash for a silent data loss.
+	if !strings.Contains(text, "not fully parsed") {
+		t.Errorf("truncation must be visible to the reader; got %q", text)
 	}
 }

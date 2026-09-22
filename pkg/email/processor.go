@@ -17,6 +17,7 @@ import (
 	netmail "net/mail"
 	"net/textproto"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -543,14 +544,16 @@ func (p *Processor) parseMultipartContentDepth(body io.Reader, boundary string, 
 	}
 	if depth >= maxMultipartDepth {
 		p.log.Warn().Int("depth", depth).Msg("multipart nesting limit reached; not recursing further")
-		return "[Multipart nesting too deep]", ""
+		return truncationNotice("This message is nested more than " + strconv.Itoa(maxMultipartDepth) + " levels deep and was not fully parsed. Open it in Gmail to read the original."), ""
 	}
 
 	mr := multipart.NewReader(body, boundary)
 	parts := 0
+	truncatedParts := false
 	for {
 		if parts >= maxPartsPerLevel {
 			p.log.Warn().Int("parts", parts).Msg("multipart part limit reached; ignoring the rest of this container")
+			truncatedParts = true
 			break
 		}
 		parts++
@@ -600,7 +603,23 @@ func (p *Processor) parseMultipartContentDepth(body io.Reader, boundary string, 
 		}
 	}
 
+	if truncatedParts {
+		note := truncationNotice("This message had more than " + strconv.Itoa(maxPartsPerLevel) + " parts and was not fully parsed. Open it in Gmail to read the original.")
+		if textContent == "" {
+			textContent = note
+		} else {
+			textContent += "\n\n" + note
+		}
+	}
+
 	return textContent, htmlContent
+}
+
+// truncationNotice formats a bridge-side limit as something a reader can act
+// on. A truncated message that says nothing is indistinguishable from a short
+// one, which is the failure mode these limits exist to avoid trading for.
+func truncationNotice(what string) string {
+	return "⚠️ " + what
 }
 
 // extractAttachments extracts attachments from IMAP body sections
