@@ -907,9 +907,7 @@ func fnPassphrase(ce *commands.Event, connector *EmailConnector) {
 **File Location:** %s
 
 **Usage:**
-• `+"`!matrimail passphrase generate`"+` - Generate new secure passphrase
-• `+"`!matrimail passphrase show-location`"+` - Show passphrase file path  
-• `+"`!matrimail passphrase set <passphrase>`"+` - Set custom passphrase
+• `+"`!matrimail passphrase show-location`"+` - Show passphrase file path
 
 **Security Note:** Your email passwords are encrypted using this passphrase. Matrimail automatically generates one if neither environment variable nor file exists.`,
 			map[bool]string{true: "✅ Set", false: "❌ Not set"}[envSet],
@@ -921,29 +919,6 @@ func fnPassphrase(ce *commands.Event, connector *EmailConnector) {
 	command := strings.ToLower(ce.Args[0])
 
 	switch command {
-	case "generate":
-		// Generate new passphrase
-		passphrase, err := generateAndStorePassphrase()
-		if err != nil {
-			ce.Reply("❌ Failed to generate passphrase: %s", err.Error())
-			return
-		}
-
-		passphrasePath, _ := getPassphraseFilePath()
-		ce.Reply(`✅ **New secure passphrase generated!**
-
-**Passphrase:** `+"`%s`"+`
-**Stored at:** %s
-**Permissions:** 0600 (owner read/write only)
-
-⚠️ **Important:** This passphrase encrypts your email passwords. Keep it secure!
-
-**Next Steps:**
-• Your existing email accounts will continue to work
-• New logins will use this passphrase for encryption
-• You can also set MATRIMAIL_PASSPHRASE environment variable for production use`,
-			passphrase, passphrasePath)
-
 	case "show-location":
 		passphrasePath, err := getPassphraseFilePath()
 		if err != nil {
@@ -951,7 +926,6 @@ func fnPassphrase(ce *commands.Event, connector *EmailConnector) {
 			return
 		}
 
-		// Check if file exists
 		exists := false
 		if _, err := os.Stat(passphrasePath); err == nil {
 			exists = true
@@ -962,62 +936,27 @@ func fnPassphrase(ce *commands.Event, connector *EmailConnector) {
 **Path:** %s
 **Status:** %s
 
-**Platform-specific locations:**
-• **Linux:** ~/.config/matrimail/passphrase
-• **macOS:** ~/Library/Application Support/Matrimail/passphrase
-• **Windows:** %%APPDATA%%\Roaming\Matrimail\passphrase
-
-You can also set the MATRIMAIL_PASSPHRASE environment variable instead of using a file.`,
+The passphrase is read from the MATRIMAIL_PASSPHRASE environment variable if
+set, otherwise from the file above. Prefer the environment variable: it keeps
+the key out of the data directory that holds the database and the salt.`,
 			passphrasePath,
 			map[bool]string{true: "✅ File exists", false: "❌ File not found"}[exists])
 
-	case "set":
-		if len(ce.Args) < 2 {
-			ce.Reply("❌ Missing passphrase argument.\n\n**Usage:** `!matrimail passphrase set <your-passphrase>`")
-			return
-		}
-
-		// Join remaining args as the passphrase (in case it has spaces)
-		passphrase := strings.Join(ce.Args[1:], " ")
-		if len(passphrase) < 8 {
-			ce.Reply("❌ Passphrase must be at least 8 characters long for security.")
-			return
-		}
-
-		// Get passphrase file path
-		passphrasePath, err := getPassphraseFilePath()
-		if err != nil {
-			ce.Reply("❌ Failed to get passphrase file path: %s", err.Error())
-			return
-		}
-
-		// Create config directory with secure permissions
-		configDir := filepath.Dir(passphrasePath)
-		if err := os.MkdirAll(configDir, 0o700); err != nil {
-			ce.Reply("❌ Failed to create config directory: %s", err.Error())
-			return
-		}
-
-		// Write passphrase file with secure permissions
-		if err := os.WriteFile(passphrasePath, []byte(passphrase), 0o600); err != nil {
-			ce.Reply("❌ Failed to write passphrase file: %s", err.Error())
-			return
-		}
-
-		ce.Reply(`✅ **Custom passphrase set successfully!**
-
-**Stored at:** %s
-**Permissions:** 0600 (owner read/write only)
-
-⚠️ **Important:** 
-• This passphrase now encrypts your email passwords
-• Existing email accounts will continue to work
-• Make sure to remember this passphrase or store it securely
-• You can override this by setting MATRIMAIL_PASSPHRASE environment variable`,
-			passphrasePath)
+	case "generate", "set":
+		// Removed deliberately. Both subcommands overwrote the passphrase file
+		// without re-encrypting the rows it protects, so the next restart could
+		// no longer decrypt any stored credential -- while the reply claimed
+		// "existing email accounts will continue to work". `generate` also
+		// printed the database encryption key itself into the Matrix room,
+		// where it lands in the homeserver's event store and every device cache.
+		// Rotation that does not re-encrypt is deletion with extra steps.
+		ce.Reply("❌ `%s` has been removed: it overwrote the encryption passphrase "+
+			"without re-encrypting stored credentials, which silently destroyed them "+
+			"at the next restart. Set MATRIMAIL_PASSPHRASE in the service environment "+
+			"instead, and re-add accounts if the key is ever genuinely lost.", command)
 
 	default:
-		ce.Reply("❌ Unknown command: %s\n\n**Available commands:**\n• `generate` - Generate new secure passphrase\n• `show-location` - Show passphrase file location\n• `set <passphrase>` - Set custom passphrase", command)
+		ce.Reply("❌ Unknown command: %s\n\n**Available commands:**\n• `show-location` - Show passphrase file location", command)
 	}
 }
 
