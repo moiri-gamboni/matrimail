@@ -456,12 +456,8 @@ func (tm *ThreadManager) addToExistingThread(thread *EmailThread, email *ParsedE
 	if email.From != "" {
 		thread.LastFrom = email.From
 	}
-	if email.To != nil {
 		thread.LastTo = append([]string(nil), email.To...)
-	}
-	if email.Cc != nil {
 		thread.LastCc = append([]string(nil), email.Cc...)
-	}
 	if !email.Date.IsZero() {
 		thread.LastDate = email.Date
 	}

@@ -877,7 +877,12 @@ func formatIMAPAddress(addr *imap.Address) string {
 	}
 
 	if addr.Name != "" {
-		return fmt.Sprintf("%s <%s@%s>", addr.Name, addr.Mailbox, addr.Host)
+		// Must go through net/mail so a display name containing a comma --
+		// "Doe, John", the Exchange/Outlook default -- is quoted. Unquoted, it
+		// fails net/mail.ParseAddress on the send path, where the recipient is
+		// then dropped from reply-all silently.
+		a := mail.Address{Name: addr.Name, Address: fmt.Sprintf("%s@%s", addr.Mailbox, addr.Host)}
+		return a.String()
 	}
 	return fmt.Sprintf("%s@%s", addr.Mailbox, addr.Host)
 }
