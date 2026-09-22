@@ -14,7 +14,6 @@ import (
 	"mime/multipart"
 	"mime/quotedprintable"
 	"net/mail"
-	netmail "net/mail"
 	"net/textproto"
 	"regexp"
 	"strings"
@@ -964,7 +963,7 @@ func formatIMAPAddress(addr *imap.Address) string {
 		// "Doe, John", the Exchange/Outlook default -- is quoted. Unquoted, it
 		// fails net/mail.ParseAddress on the send path, where the recipient is
 		// then dropped from reply-all silently.
-		a := netmail.Address{Name: addr.Name, Address: fmt.Sprintf("%s@%s", addr.Mailbox, addr.Host)}
+		a := mail.Address{Name: addr.Name, Address: fmt.Sprintf("%s@%s", addr.Mailbox, addr.Host)}
 		return a.String()
 	}
 	return fmt.Sprintf("%s@%s", addr.Mailbox, addr.Host)
