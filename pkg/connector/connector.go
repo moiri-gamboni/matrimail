@@ -195,13 +195,6 @@ func (ec *EmailConnector) Init(bridge *bridgev2.Bridge) {
 		bridge.Log.Error().Err(err).Msg("Database is not writable. Fix filesystem permissions or remove stale DB files, then restart the bridge.")
 		panic(fmt.Errorf("database not writable: %w", err))
 	}
-	// Best-effort: add index for faster message lookups by (network, remote_id) if schema matches.
-	if _, err := bridge.DB.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_message_network_remote ON message(network, remote_id)`); err == nil {
-		bridge.Log.Trace().Msg("Ensured index idx_message_network_remote on message(network, remote_id)")
-	}
-	if _, err := bridge.DB.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_messages_network_remote ON messages(network, remote_id)`); err == nil {
-		bridge.Log.Trace().Msg("Ensured index idx_messages_network_remote on messages(network, remote_id)")
-	}
 
 	// Initialize managers
 	logger := bridge.Log.With().Str("component", "imap").Logger()
@@ -211,7 +204,7 @@ func (ec *EmailConnector) Init(bridge *bridgev2.Bridge) {
 	ec.RoomManager = matrix.NewRoomManager(&roomLogger)
 
 	// Prefer a DB-backed resolver that can find existing portals by prior bridged messages
-	resolver := &DBThreadMetadataResolver{Bridge: bridge, Log: &roomLogger, Network: "email"}
+	resolver := &DBThreadMetadataResolver{Bridge: bridge, Log: &roomLogger}
 	ec.ThreadManager = email.NewThreadManager(resolver)
 
 	// Initialize email processor and wire it to the IMAP manager
