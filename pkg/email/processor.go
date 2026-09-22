@@ -529,7 +529,9 @@ const maxMultipartDepth = 20
 
 // maxPartsPerLevel bounds the breadth of a single multipart container for the
 // same reason depth is bounded: the per-part size limit says nothing about how
-// many parts there are.
+// many parts there are. 200 is far past any legitimate message -- the largest
+// honest case is one part per attachment, and mail providers reject attachment
+// counts an order of magnitude below this.
 const maxPartsPerLevel = 200
 
 // parseMultipartContent parses multipart MIME content.

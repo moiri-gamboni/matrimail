@@ -173,8 +173,11 @@ Once your bridge is running, send these commands in a DM to the bot:
 ### Advanced
 
 - `!matrimail passphrase` — Manage the password that encrypts your email credentials
-- `!matrimail passphrase generate` — Create a new secure encryption password
-- `!matrimail passphrase set <pass>` — Set a custom encryption passphrase
+- `!matrimail passphrase show-location` — Show where the encryption passphrase is stored (never prints it)
+
+  `generate` and `set` were removed: both wrote a new passphrase without
+  re-encrypting the credentials it protects, so the next restart could decrypt
+  nothing. Set `MATRIMAIL_PASSPHRASE` in the service environment instead.
 - `!matrimail passphrase show-location` — Show where the passphrase file is stored
 - `!matrimail nuke confirm` — **DANGER:** Delete all bridge data and reset (requires confirmation)
 

@@ -947,7 +947,8 @@ the key out of the data directory that holds the database and the salt.`,
 		// without re-encrypting the rows it protects, so the next restart could
 		// no longer decrypt any stored credential -- while the reply claimed
 		// "existing email accounts will continue to work". `generate` also
-		// printed the database encryption key itself into the Matrix room,
+		// printed the passphrase -- the sole input to key derivation -- into
+		// the Matrix room,
 		// where it lands in the homeserver's event store and every device cache.
 		// Rotation that does not re-encrypt is deletion with extra steps.
 		ce.Reply("❌ `%s` has been removed: it overwrote the encryption passphrase "+
