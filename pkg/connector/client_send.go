@@ -78,6 +78,10 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 			thread.Subject = deriveSubjectFromBody(msg.Content.Body)
 		}
 	} else {
+		if err := checkReplyTargetResolvable(thread, msg.ReplyTo); err != nil {
+			_ = postErrorToPortal(ctx, ec.UserLogin.Bridge, msg.Portal, "Send refused", err.Error())
+			return nil, err
+		}
 		inReplyTo, references = computeReplyChain(thread, msg.ReplyTo)
 	}
 
@@ -175,6 +179,8 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 		dedupKey = strings.Trim(serverID, "<>")
 	}
 
+	_ = postSendReceiptToPortal(ctx, ec.UserLogin.Bridge, msg.Portal, fromAddr, to, cc)
+
 	matrixEvtID := ""
 	if msg.Event != nil {
 		matrixEvtID = string(msg.Event.ID)
@@ -214,20 +220,21 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 	// References chain. Best-effort; failure is logged but not fatal — the
 	// in-memory cache is still good for at least 24h.
 	pm := &PortalMetadata{
-		ThreadID:        thread.ThreadID,
-		Subject:         thread.Subject,
-		Participants:    append([]string(nil), thread.Participants...),
-		References:      append([]string(nil), thread.References...),
-		LastMessageID:   thread.MessageID,
-		IsDraft:         thread.IsDraft,
-		GmailThreadID:   thread.GmailThreadID,
-		LastFrom:        thread.LastFrom,
-		LastTo:          append([]string(nil), thread.LastTo...),
-		LastCc:          append([]string(nil), thread.LastCc...),
-		LastDeliveredTo: thread.LastDeliveredTo,
-		LastDate:        thread.LastDate,
-		LastTextBody:    thread.LastTextBody,
-		LastHTMLBody:    thread.LastHTMLBody,
+		ThreadID:             thread.ThreadID,
+		Subject:              thread.Subject,
+		Participants:         append([]string(nil), thread.Participants...),
+		References:           append([]string(nil), thread.References...),
+		LastMessageID:        thread.MessageID,
+		IsDraft:              thread.IsDraft,
+		GmailThreadID:        thread.GmailThreadID,
+		LastFrom:             thread.LastFrom,
+		LastTo:               append([]string(nil), thread.LastTo...),
+		LastCc:               append([]string(nil), thread.LastCc...),
+		LastInboundMessageID: thread.LastInboundMessageID,
+		LastDeliveredTo:      thread.LastDeliveredTo,
+		LastDate:             thread.LastDate,
+		LastTextBody:         thread.LastTextBody,
+		LastHTMLBody:         thread.LastHTMLBody,
 	}
 	msg.Portal.Metadata = pm
 	if err := msg.Portal.Save(ctx); err != nil {
@@ -306,20 +313,21 @@ func (ec *EmailClient) resolveThreadForPortalWithMetadata(portal *bridgev2.Porta
 		return nil, fmt.Errorf("matrimail: thread %s not found in cache and no portal metadata to restore from", threadID)
 	}
 	thread := &email.EmailThread{
-		ThreadID:        pm.ThreadID,
-		Subject:         pm.Subject,
-		Participants:    append([]string(nil), pm.Participants...),
-		References:      append([]string(nil), pm.References...),
-		MessageID:       pm.LastMessageID,
-		IsDraft:         pm.IsDraft,
-		GmailThreadID:   pm.GmailThreadID,
-		LastFrom:        pm.LastFrom,
-		LastTo:          append([]string(nil), pm.LastTo...),
-		LastCc:          append([]string(nil), pm.LastCc...),
-		LastDeliveredTo: pm.LastDeliveredTo,
-		LastDate:        pm.LastDate,
-		LastTextBody:    pm.LastTextBody,
-		LastHTMLBody:    pm.LastHTMLBody,
+		ThreadID:             pm.ThreadID,
+		Subject:              pm.Subject,
+		Participants:         append([]string(nil), pm.Participants...),
+		References:           append([]string(nil), pm.References...),
+		MessageID:            pm.LastMessageID,
+		IsDraft:              pm.IsDraft,
+		GmailThreadID:        pm.GmailThreadID,
+		LastFrom:             pm.LastFrom,
+		LastTo:               append([]string(nil), pm.LastTo...),
+		LastCc:               append([]string(nil), pm.LastCc...),
+		LastInboundMessageID: pm.LastInboundMessageID,
+		LastDeliveredTo:      pm.LastDeliveredTo,
+		LastDate:             pm.LastDate,
+		LastTextBody:         pm.LastTextBody,
+		LastHTMLBody:         pm.LastHTMLBody,
 	}
 	ec.Main.ThreadManager.CacheForReceiver(string(ec.UserLogin.ID), thread)
 	return thread, nil
@@ -580,4 +588,36 @@ func (ec *EmailClient) downloadMediaAsAttachment(ctx context.Context, content *e
 		Data:        data,
 		Disposition: "attachment",
 	}, nil
+}
+
+// checkReplyTargetResolvable refuses an outbound whose Matrix reply points at
+// a message other than the one the thread's Last* fields describe.
+//
+// Recipients for a reply are resolved from thread.LastFrom/LastTo/LastCc,
+// which track the most recent inbound. An explicit reply to any older message
+// was previously still addressed from that newest state -- so replying to a
+// funder's question in a long thread went out to whoever happened to be on the
+// latest message, quoting an unrelated one. Per-message recipients are not
+// stored anywhere, so they cannot be recovered; refusing is the only honest
+// option. Replying to our own most recent send is fine: the Last* fields still
+// describe the correct inbound to answer.
+func checkReplyTargetResolvable(thread *email.EmailThread, replyTo *database.Message) error {
+	if thread == nil || replyTo == nil {
+		return nil
+	}
+	target := strings.TrimPrefix(string(replyTo.ID), "email:")
+	if target == "" {
+		return nil
+	}
+	if target == thread.LastInboundMessageID || target == thread.MessageID {
+		return nil
+	}
+	if thread.LastInboundMessageID == "" {
+		// Nothing to compare against (restored thread predating this field).
+		// Fall through rather than refuse every reply in an old room.
+		return nil
+	}
+	return errors.New("matrimail: replying to an older message in this thread is not supported — " +
+		"its recipients are not stored, and answering from the newest message's recipients could " +
+		"reach people who were not on the message you replied to. Reply to the most recent message instead")
 }

@@ -11,10 +11,10 @@ import (
 // EmailAttachment represents an email attachment (forward declaration)
 // The actual struct is defined in processor.go to avoid circular imports
 type EmailAttachment struct {
-	Filename        string
-	ContentType     string
-	Size            int64
-	Data            []byte
+	Filename    string
+	ContentType string
+	Size        int64
+	Data        []byte
 	// Inline-related metadata
 	ContentID       string // normalized: no <>, lowercase
 	ContentLocation string // as in MIME header, normalized path-like string
@@ -24,12 +24,12 @@ type EmailAttachment struct {
 
 // EmailThread represents an email conversation thread
 type EmailThread struct {
-	ThreadID  string   // Message-ID of the first email in thread
-	Subject   string   // Email subject line
+	ThreadID     string   // Message-ID of the first email in thread
+	Subject      string   // Email subject line
 	Participants []string // List of email addresses currently active in thread
-	MessageID string   // Current message ID
-	InReplyTo string   // Message this is replying to (for threading)
-	References []string // Full thread chain
+	MessageID    string   // Current message ID
+	InReplyTo    string   // Message this is replying to (for threading)
+	References   []string // Full thread chain
 
 	// Cc holds explicit carbon-copy recipients for compose flows. Inbound
 	// threading flattens From/To/Cc into Participants, so this is only set
@@ -66,6 +66,12 @@ type EmailThread struct {
 	LastTo []string
 	// LastCc is the Cc header of the most recent inbound.
 	LastCc []string
+	// LastInboundMessageID is the Message-ID of the inbound that produced the
+	// LastFrom/LastTo/LastCc/LastTextBody values above. The outbound path uses
+	// it to check that an explicit Matrix reply targets the message those
+	// fields actually describe; replying to any older message would otherwise
+	// be addressed from the wrong recipient set.
+	LastInboundMessageID string
 
 	// LastDate is the Date header of the most recent inbound. Drives the
 	// Gmail-style "On <date>, <sender> wrote:" attribution line on the next
@@ -107,8 +113,8 @@ type ThreadMetadataResolver interface {
 }
 
 const (
-	maxCachedThreads = 10000      // Maximum number of threads to cache
-	threadCacheTTL  = 24 * time.Hour // TTL for cached threads
+	maxCachedThreads = 10000          // Maximum number of threads to cache
+	threadCacheTTL   = 24 * time.Hour // TTL for cached threads
 )
 
 type ThreadManager struct {
@@ -153,10 +159,10 @@ func (tm *ThreadManager) GetThreadByID(receiver, threadID string) *EmailThread {
 	key := receiver + "|" + threadID
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
-	
+
 	// Clean up expired threads periodically
 	tm.cleanupExpiredThreadsIfNeeded()
-	
+
 	if th, ok := tm.knownThreads[key]; ok {
 		th.LastAccessed = time.Now()
 		return th
@@ -220,7 +226,6 @@ func (tm *ThreadManager) CacheForReceiver(receiver string, thread *EmailThread) 
 	tm.cacheThread(receiver, thread)
 }
 
-
 // ParsedEmail represents a parsed email message
 type ParsedEmail struct {
 	MessageID   string
@@ -250,13 +255,12 @@ type ParsedEmail struct {
 	DeliveredTo string
 }
 
-
 // isForwardedMessage checks if an email is a forward based on subject and content
 func isForwardedMessage(email *ParsedEmail) bool {
 	if email == nil {
 		return false
 	}
-	
+
 	// Check subject for forward prefixes
 	subject := strings.ToLower(strings.TrimSpace(email.Subject))
 	forwardPrefixes := []string{"fwd:", "fw:", "forward:"}
@@ -265,7 +269,7 @@ func isForwardedMessage(email *ParsedEmail) bool {
 			return true
 		}
 	}
-	
+
 	// Check body content for forward markers (reuse existing logic)
 	content := strings.ToLower(email.TextContent + " " + email.HTMLContent)
 	forwardMarkers := []string{
@@ -279,7 +283,7 @@ func isForwardedMessage(email *ParsedEmail) bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -346,7 +350,7 @@ func (tm *ThreadManager) DetermineThread(receiver string, email *ParsedEmail) *E
 func (tm *ThreadManager) findThreadByMessageID(messageID string) *EmailThread {
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
-	
+
 	// Use O(1) index lookup instead of O(n) linear search
 	if thread, exists := tm.messageIDIndex[messageID]; exists {
 		return thread
@@ -361,10 +365,10 @@ func (tm *ThreadManager) addToExistingThread(thread *EmailThread, email *ParsedE
 	for _, p := range thread.Participants {
 		oldParticipants[strings.ToLower(p)] = true
 	}
-	
+
 	// Get current email participants (From, To, CC)
 	currentEmailParticipants := make(map[string]bool)
-	
+
 	// Add sender
 	if fromAddr := extractEmailAddress(email.From); fromAddr != "" {
 		currentEmailParticipants[strings.ToLower(fromAddr)] = true
@@ -381,7 +385,7 @@ func (tm *ThreadManager) addToExistingThread(thread *EmailThread, email *ParsedE
 			currentEmailParticipants[strings.ToLower(cleanAddr)] = true
 		}
 	}
-	
+
 	// Merge with existing participants for the thread's active participant list
 	allParticipants := make(map[string]bool)
 	for participant := range oldParticipants {
@@ -390,17 +394,17 @@ func (tm *ThreadManager) addToExistingThread(thread *EmailThread, email *ParsedE
 	for participant := range currentEmailParticipants {
 		allParticipants[participant] = true
 	}
-	
+
 	// Store participant changes for Matrix room updates
 	var addedParticipants, removedParticipants []string
-	
+
 	// Find newly added participants (in current email but not in thread)
 	for participant := range currentEmailParticipants {
 		if !oldParticipants[participant] {
 			addedParticipants = append(addedParticipants, participant)
 		}
 	}
-	
+
 	// Find potentially removed participants (in thread but not in current email)
 	// Only consider someone "removed" if they were active and are explicitly absent
 	if len(thread.Participants) > 0 { // Only check removals for existing threads
@@ -411,7 +415,7 @@ func (tm *ThreadManager) addToExistingThread(thread *EmailThread, email *ParsedE
 			}
 		}
 	}
-	
+
 	// Update thread with current email participants (represents "active" participants)
 	// This affects who can see new messages
 	// Use the UNION of old + current participants, not just the current
@@ -431,7 +435,7 @@ func (tm *ThreadManager) addToExistingThread(thread *EmailThread, email *ParsedE
 		activeParticipants = append(activeParticipants, participant)
 	}
 	thread.Participants = activeParticipants
-	
+
 	// Store metadata for Matrix room management
 	thread.AddedParticipants = addedParticipants
 	thread.RemovedParticipants = removedParticipants
@@ -458,6 +462,7 @@ func (tm *ThreadManager) addToExistingThread(thread *EmailThread, email *ParsedE
 	}
 	thread.LastTo = append([]string(nil), email.To...)
 	thread.LastCc = append([]string(nil), email.Cc...)
+	thread.LastInboundMessageID = email.MessageID
 	if !email.Date.IsZero() {
 		thread.LastDate = email.Date
 	}
@@ -510,28 +515,29 @@ func (tm *ThreadManager) createNewThread(email *ParsedEmail) *EmailThread {
 
 	// Create new thread
 	thread := &EmailThread{
-		ThreadID:        threadID,
-		Subject:         email.Subject,
-		Participants:    participants,
-		MessageID:       email.MessageID,
-		InReplyTo:       email.InReplyTo,
-		References:      email.References,
-		GmailThreadID:   email.GmailThreadID,
-		LastDeliveredTo: email.DeliveredTo,
-		LastFrom:        email.From,
-		LastTo:          append([]string(nil), email.To...),
-		LastCc:          append([]string(nil), email.Cc...),
-		LastDate:        email.Date,
-		LastTextBody:    capBody(email.TextContent),
-		LastHTMLBody:    capBody(email.HTMLContent),
-		LastAccessed:    time.Now(),
+		ThreadID:             threadID,
+		Subject:              email.Subject,
+		Participants:         participants,
+		MessageID:            email.MessageID,
+		InReplyTo:            email.InReplyTo,
+		References:           email.References,
+		GmailThreadID:        email.GmailThreadID,
+		LastDeliveredTo:      email.DeliveredTo,
+		LastFrom:             email.From,
+		LastTo:               append([]string(nil), email.To...),
+		LastCc:               append([]string(nil), email.Cc...),
+		LastInboundMessageID: email.MessageID,
+		LastDate:             email.Date,
+		LastTextBody:         capBody(email.TextContent),
+		LastHTMLBody:         capBody(email.HTMLContent),
+		LastAccessed:         time.Now(),
 	}
 
 	// Add to known threads (no receiver here; caller will cache after DetermineThread using receiver)
 	// For now, store under empty receiver to keep legacy behavior.
 	tm.mu.Lock()
 	tm.knownThreads[threadID] = thread
-	
+
 	// Enforce cache size limit
 	if len(tm.knownThreads) > maxCachedThreads {
 		tm.evictOldestThreads(maxCachedThreads / 4) // Remove 25% when limit exceeded
@@ -551,13 +557,12 @@ func cleanMessageID(messageID string) string {
 	return messageID
 }
 
-
 // parseReferences parses the References header into individual Message-IDs
 func parseReferences(references string) []string {
 	// References header contains space-separated Message-IDs in angle brackets
 	re := regexp.MustCompile(`<([^>]+)>`)
 	matches := re.FindAllStringSubmatch(references, -1)
-	
+
 	var result []string
 	for _, match := range matches {
 		if len(match) > 1 {
@@ -598,7 +603,7 @@ func extractEmailAddress(input string) string {
 func normalizeSubject(subject string) string {
 	subject = strings.TrimSpace(subject)
 	subject = strings.ToLower(subject)
-	
+
 	// Remove common prefixes
 	prefixes := []string{"re:", "fwd:", "fw:", "re[", "fwd[", "fw["}
 	for {
@@ -627,7 +632,7 @@ func normalizeSubject(subject string) string {
 			break
 		}
 	}
-	
+
 	return subject
 }
 
@@ -637,7 +642,7 @@ func generateThreadID(subject string, date time.Time) string {
 	if normalized == "" {
 		normalized = "no-subject"
 	}
-	
+
 	// Create a simple hash-like ID
 	return strings.ReplaceAll(normalized, " ", "-") + "-" + date.Format("20060102150405")
 }
@@ -658,17 +663,17 @@ func (tm *ThreadManager) cleanupExpiredThreadsIfNeeded() {
 	if time.Since(tm.lastCleanup) < time.Hour {
 		return
 	}
-	
+
 	tm.lastCleanup = time.Now()
 	expiredKeys := make([]string, 0)
 	cutoff := time.Now().Add(-threadCacheTTL)
-	
+
 	for key, thread := range tm.knownThreads {
 		if thread.LastAccessed.Before(cutoff) {
 			expiredKeys = append(expiredKeys, key)
 		}
 	}
-	
+
 	for _, key := range expiredKeys {
 		// Remove from main cache and also clean up message ID index
 		if thread := tm.knownThreads[key]; thread != nil {
@@ -683,13 +688,13 @@ func (tm *ThreadManager) evictOldestThreads(countToRemove int) {
 	if len(tm.knownThreads) <= countToRemove {
 		return
 	}
-	
+
 	// Create slice of threads with their keys, sorted by LastAccessed
 	type threadEntry struct {
 		key          string
 		lastAccessed time.Time
 	}
-	
+
 	threads := make([]threadEntry, 0, len(tm.knownThreads))
 	for key, thread := range tm.knownThreads {
 		threads = append(threads, threadEntry{
@@ -697,7 +702,7 @@ func (tm *ThreadManager) evictOldestThreads(countToRemove int) {
 			lastAccessed: thread.LastAccessed,
 		})
 	}
-	
+
 	// Sort by LastAccessed (oldest first) using efficient algorithm
 	// Use simple insertion sort which is O(n) for nearly-sorted data and O(n²) worst case
 	// but much more cache-friendly than bubble sort
@@ -710,7 +715,7 @@ func (tm *ThreadManager) evictOldestThreads(countToRemove int) {
 		}
 		threads[j+1] = key
 	}
-	
+
 	// Remove the oldest entries
 	removedCount := 0
 	for _, entry := range threads {
