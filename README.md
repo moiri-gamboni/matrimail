@@ -173,11 +173,7 @@ Once your bridge is running, send these commands in a DM to the bot:
 ### Advanced
 
 - `!matrimail passphrase` — Manage the password that encrypts your email credentials
-- `!matrimail passphrase show-location` — Show where the encryption passphrase is stored (never prints it)
-
-  `generate` and `set` were removed: both wrote a new passphrase without
-  re-encrypting the credentials it protects, so the next restart could decrypt
-  nothing. Set `MATRIMAIL_PASSPHRASE` in the service environment instead.
+- `!matrimail passphrase show-location` — Show where the encryption passphrase is stored (never prints it). This is the only passphrase subcommand: there is no way to change the passphrase from chat, because writing a new one does not re-encrypt the credentials it protects, and the next restart would then decrypt nothing. Set `MATRIMAIL_PASSPHRASE` in the service environment instead.
 - `!matrimail nuke confirm` — **DANGER:** Delete all bridge data and reset (requires confirmation)
 
 ## Sending email
