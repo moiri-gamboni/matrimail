@@ -7,31 +7,42 @@ import (
 
 	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2"
+	"maunium.net/go/mautrix/bridgev2/networkid"
 )
 
-// DBThreadMetadataResolver attempts to resolve an email Message-ID to a thread/portal
-// by looking up previously bridged messages in the bridgev2 database.
-// It is best-effort: if the schema doesn't match, it returns no match without error.
+// DBThreadMetadataResolver resolves an email Message-ID to the thread whose
+// room already holds that message, by asking the bridge database which portal a
+// previously bridged message landed in.
 //
-// Expected idea: bridge stores remote messages keyed by network and remote ID (we use
-// the raw Message-ID as the RemoteMessage.GetID). Those rows should contain the
-// portal/room (thread) identifier the message was sent to.
+// This is what keeps a conversation in one room across a restart. The in-memory
+// ThreadManager evicts after 24h, and an inbound whose parent is no longer
+// cached would otherwise be treated as the start of a new thread and open a
+// second room for a conversation the user is already reading.
 //
-// This resolver tries a few common table/column layouts used by bridgev2. If a query
-// fails (unknown table/column), it is ignored. First successful hit wins.
+// It only resolves messages this bridge has seen before. A reply whose parent
+// was never bridged falls through to the header heuristics, as it must.
 //
-// Returned thread IDs are normalized to strip "thread:" prefix if present.
-//
-// NOTE: This relies on the bridge having previously bridged a message for the given
-// Message-ID. Fresh replies whose parent wasn't bridged won't resolve here and will
-// fall back to the custom thread index and heuristics.
-
+// Returned thread IDs have the "thread:" portal-key prefix stripped.
 type DBThreadMetadataResolver struct {
-	Bridge  *bridgev2.Bridge
-	Log     *zerolog.Logger
-	Network string // e.g. "email"
+	Bridge *bridgev2.Bridge
+	Log    *zerolog.Logger
 }
 
+// ResolveThreadID returns the thread ID for an email Message-ID, or false.
+//
+// This used to hand-roll SQL against guessed table and column names -- a UNION
+// over `message` and `messages` selecting `portal_id` filtered on `network`,
+// `remote_id` and `receiver`, none of which exist. bridgev2's schema names the
+// columns `bridge_id`, `id`, `room_id` and `room_receiver`, and there is no
+// plural table, so every arm failed on an unknown column and the errors were
+// discarded as "schema didn't match, best effort". The resolver therefore
+// answered "no match" to every query ever made of it, and because a miss is a
+// legitimate answer here, nothing upstream could tell the difference: the
+// symptom was the restart behaviour above, with no error anywhere.
+//
+// Going through the framework's own typed query instead of any SQL is what
+// stops that recurring -- the schema can now only drift under us in a way the
+// compiler sees.
 func (r *DBThreadMetadataResolver) ResolveThreadID(receiver, messageID string) (string, bool) {
 	if r == nil || r.Bridge == nil || r.Bridge.DB == nil {
 		return "", false
@@ -40,80 +51,45 @@ func (r *DBThreadMetadataResolver) ResolveThreadID(receiver, messageID string) (
 	if mid == "" {
 		return "", false
 	}
-	// Use short timeout to avoid delaying email delivery - fast failure to heuristics is better UX
+	// Short timeout: falling back to the header heuristics is much better than
+	// holding up delivery behind a slow query.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Use single UNION query to check all possible table/column combinations efficiently
-	// Try both raw and namespaced remote IDs to be robust
-	candidates := []string{mid, "email:" + mid}
-	
-	// Build single query that tries all combinations with UNION
-	unionQuery := `
-		SELECT portal_id, 'message_with_receiver' as source FROM message 
-		WHERE network = ? AND remote_id = ? AND receiver = ?
-		UNION ALL
-		SELECT portal_id, 'message_no_receiver' as source FROM message 
-		WHERE network = ? AND remote_id = ?
-		UNION ALL  
-		SELECT portal_id, 'messages_with_receiver' as source FROM messages 
-		WHERE network = ? AND remote_id = ? AND receiver = ?
-		UNION ALL
-		SELECT portal_id, 'messages_no_receiver' as source FROM messages 
-		WHERE network = ? AND remote_id = ?
-		LIMIT 1`
-		
-	for _, rid := range candidates {
-		if result := r.queryUnionResult(ctx, dialectQuery(r.Bridge.DB.Dialect, unionQuery), r.Network, rid, receiver, r.Network, rid, r.Network, rid, receiver, r.Network, rid); result != "" {
-			ntid := normalizeThreadID(result)
+	// Messages are stored under the "email:" namespace (see the networkid.MessageID
+	// built in processor.go). The bare ID is tried second for rows written
+	// before that prefix existed.
+	for _, rid := range []string{"email:" + mid, mid} {
+		msg, err := r.Bridge.DB.Message.GetFirstPartByID(ctx, networkid.UserLoginID(receiver), networkid.MessageID(rid))
+		if err != nil {
+			// A real failure, not a miss. Reported rather than swallowed: the
+			// consequence is silent (threads quietly start landing in new
+			// rooms), so the log line is the only way anyone finds out.
 			if r.Log != nil {
-				r.Log.Debug().Str("receiver", receiver).Str("remote_id", rid).Str("thread_id", ntid).Msg("DB resolver: resolved email message to thread")
+				r.Log.Warn().Err(err).
+					Str("receiver", receiver).
+					Msg("thread resolver query failed; this thread may open a second room instead of continuing in its own")
 			}
-			return ntid, true
+			return "", false
 		}
-	}
-
-	if r.Log != nil {
-		r.Log.Trace().Str("receiver", receiver).Str("message_id", mid).Msg("DB resolver: no mapping found for email Message-ID")
+		if msg != nil {
+			tid := normalizeThreadID(string(msg.Room.ID))
+			if tid == "" {
+				continue
+			}
+			if r.Log != nil {
+				r.Log.Debug().
+					Str("receiver", receiver).
+					Str("remote_id", rid).
+					Str("thread_id", tid).
+					Msg("thread resolver: matched a previously bridged message")
+			}
+			return tid, true
+		}
 	}
 	return "", false
 }
 
-func (r *DBThreadMetadataResolver) queryUnionResult(ctx context.Context, sql string, args ...any) string {
-	start := time.Now()
-	rows, err := r.Bridge.DB.Query(ctx, sql, args...)
-	if err != nil {
-		// Only log if it's not a simple "table doesn't exist" error (expected for best-effort)
-		if r.Log != nil && !strings.Contains(strings.ToLower(err.Error()), "no such table") {
-			r.Log.Debug().Err(err).Dur("duration", time.Since(start)).Msg("DB resolver union query failed")
-		}
-		return ""
-	}
-	defer rows.Close()
-	
-	if rows.Next() {
-		var portalID, source string
-		if err := rows.Scan(&portalID, &source); err == nil {
-			if r.Log != nil {
-				duration := time.Since(start)
-				if duration > 500*time.Millisecond {
-					r.Log.Warn().Dur("duration", duration).Str("source", source).Msg("DB resolver union query was slow")
-				}
-			}
-			return portalID
-		}
-		if r.Log != nil {
-			r.Log.Debug().Err(err).Msg("DB resolver union scan failed")
-		}
-	}
-	return ""
-}
-
-
 func normalizeThreadID(portalOrThreadID string) string {
-	id := strings.TrimSpace(portalOrThreadID)
-	if strings.HasPrefix(id, "thread:") {
-		return strings.TrimPrefix(id, "thread:")
-	}
-	return id
+	return strings.TrimPrefix(strings.TrimSpace(portalOrThreadID), "thread:")
 }
