@@ -105,3 +105,6 @@ Icon
 *.keystore
 *.asc
 .git-credentials
+
+# Review agent output (regenerated per run, not part of the source)
+/reviews/
