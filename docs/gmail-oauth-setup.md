@@ -34,7 +34,7 @@ Practical answer: you create your own Google Cloud project and matrimail uses it
    |---|---|---|
    | Who can authorise | Only accounts in your Workspace organisation | Any Google account you list as a test user |
    | Verification by Google | Not required | Not required while in Testing, required to leave it |
-   | Refresh token lifetime | Does not expire | **Expires after 7 days while the app is in Testing**, so you re-authorise weekly |
+   | Refresh token lifetime | No fixed expiry, until revoked | **Expires after 7 days while the app is in Testing**, so you re-authorise weekly |
    | Restricted scopes (`full` mode) | Available, though an admin may need to trust the app | Require verification and a third-party security assessment |
 
    Click **Create**.
@@ -111,9 +111,9 @@ Then `!matrimail login` as in 2.1; when the auth URL says `http://127.0.0.1:8888
 
 ### 2.3 True headless (no browser, no SSH)
 
-> **This puts a permanent full-mailbox credential into your chat history. Use 2.2 instead if you possibly can.**
+> **This puts a long-lived full-mailbox credential into your chat history. Use 2.2 instead if you possibly can.**
 >
-> A refresh token does not expire and can mint access tokens to the whole mailbox indefinitely. Typing one into a Matrix room writes it to the homeserver's event store, to every device that syncs the room, and to any backup of either. Redacting the message afterwards does not reliably remove it from all of those copies, and on a homeserver you do not run you cannot verify that it did.
+> A refresh token lasts until it is revoked for an Internal app, and a week even for an External app in Testing, and for as long as it lives it can mint access tokens to the whole mailbox. Typing one into a Matrix room writes it to the homeserver's event store, to every device that syncs the room, and to any backup of either. Redacting the message afterwards does not reliably remove it from all of those copies, and on a homeserver you do not run you cannot verify that it did.
 >
 > If you have already done this, treat the token as compromised: run `!matrimail oauth revoke your@email.com` to sever it at Google, then authorise again through 2.2.
 

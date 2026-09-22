@@ -1186,7 +1186,7 @@ func fnOAuth(ce *commands.Event, connector *EmailConnector) {
 - ` + "`!matrimail oauth paste-token <email> <refresh_token>`" + ` — register
   an account using a refresh token you obtained out-of-band on another
   machine. Token is validated against Google before being stored.
-  **Last resort:** the token you type never expires and grants your whole
+  **Last resort:** the token you type is long-lived and grants your whole
   mailbox, and typing it here writes it into this room's history. Prefer an
   SSH port-forward and a normal login.
 - ` + "`!matrimail oauth revoke <email>`" + ` — revoke matrimail's access at
@@ -1317,9 +1317,9 @@ func fnOAuthPasteToken(ce *commands.Event, connector *EmailConnector) {
 	if len(ce.Args) < 3 {
 		ce.Reply(`Usage: ` + "`!matrimail oauth paste-token <email> <refresh_token>`" + `
 
-⚠️ **This writes a permanent full-mailbox credential into this room.** A refresh
-token does not expire and can mint access tokens to your whole mailbox until
-it is revoked. Sending it here stores it in the homeserver's event store and
+⚠️ **This writes a long-lived full-mailbox credential into this room.** A refresh
+token can mint access tokens to your whole mailbox until it expires or is
+revoked. Sending it here stores it in the homeserver's event store and
 on every device that syncs this room; deleting the message afterwards does not
 reliably remove those copies. Use an SSH port-forward and a normal login
 instead wherever that is possible.

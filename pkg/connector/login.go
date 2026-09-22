@@ -163,7 +163,7 @@ Default mode on this bridge: **` + defaultMode + `**.
 matrimail config.
 
 If you cannot expose a browser-reachable port at all, ` + "`!matrimail oauth paste-token`" + `
-is a last resort: it works, but the refresh token you type never expires,
+is a last resort: it works, but the refresh token you type is long-lived,
 grants your whole mailbox, and ends up in that room's history.
 
 *Need help?* ` + "`!matrimail help`"
