@@ -7,10 +7,9 @@ import (
 
 func parseOneAddressForTest(raw string) (*mail.Address, error) { return mail.ParseAddress(raw) }
 
-// The Gmail API path is the one this deployment runs, and re-emitting a display
-// name unquoted here is what dropped institutional contacts ("Doe, John", the
-// Exchange default) from reply-all with no log. The first pass fixed the IMAP
-// formatter and missed this one; nothing failed, because nothing tested it.
+// The Gmail API parser re-emitted a display name unquoted, and the unquoted
+// form fails to re-parse on the send path, so contacts named like "Doe, John"
+// (the Exchange default) were dropped from reply-all with no log.
 func TestSplitAddressList_QuotesNamesContainingCommas(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

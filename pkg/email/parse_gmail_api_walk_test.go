@@ -8,8 +8,7 @@ import (
 	gmail "google.golang.org/api/gmail/v1"
 )
 
-// The Gmail-API parser is the one this deployment actually runs, and its
-// payload walker is fed entirely by remote input.
+// The Gmail-API payload walker is fed entirely by remote input.
 
 // A part carrying a filename but no body used to panic on part.Body.Size,
 // while the two text branches beside it guarded the same field. The panic
