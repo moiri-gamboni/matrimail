@@ -378,7 +378,7 @@ func resolveReplyAllRecipients(thread *email.EmailThread, selves []string) ([]ne
 			take(p, &to, seen)
 		}
 		if len(to) == 0 {
-			return nil, nil, dropped, errors.New("matrimail: no recipients (thread participants empty after self-exclusion)")
+			return nil, nil, dropped, noRecipientsError("thread participants empty after self-exclusion", dropped)
 		}
 		return to, nil, dropped, nil
 	}
@@ -394,7 +394,7 @@ func resolveReplyAllRecipients(thread *email.EmailThread, selves []string) ([]ne
 		take(p, &cc, seen)
 	}
 	if len(to) == 0 && len(cc) == 0 {
-		return nil, nil, dropped, errors.New("matrimail: no recipients (reply-all set empty after self-exclusion)")
+		return nil, nil, dropped, noRecipientsError("reply-all set empty after self-exclusion", dropped)
 	}
 	return to, cc, dropped, nil
 }
@@ -428,9 +428,21 @@ func selvesSet(selves []string) map[string]bool {
 	return out
 }
 
+// noRecipientsError explains an empty recipient set. When every candidate
+// failed to parse, "empty after self-exclusion" is simply false and hides the
+// evidence, so the unparseable entries are named instead.
+func noRecipientsError(reason string, dropped []string) error {
+	if len(dropped) > 0 {
+		return fmt.Errorf("matrimail: no recipients — %d address(es) on this thread could not be parsed: %s",
+			len(dropped), strings.Join(dropped, ", "))
+	}
+	return fmt.Errorf("matrimail: no recipients (%s)", reason)
+}
+
 // parseAddrIfAllowed parses a "Name <addr>" / "addr" string, filters self
 // addresses, and dedupes against `seen` (lowercased addr-key). Returns
 // (Address, true) when the entry should be included.
+//
 // A parse failure means a recipient the thread listed is being dropped, which
 // is materially different from filtering out ourselves or a duplicate. It is
 // returned separately so the caller can tell the user rather than lose them
