@@ -78,6 +78,10 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 			thread.Subject = deriveSubjectFromBody(msg.Content.Body)
 		}
 	} else {
+		if err := checkReplyTargetResolvable(thread, msg.ReplyTo); err != nil {
+			_ = postErrorToPortal(ctx, ec.UserLogin.Bridge, msg.Portal, "Send refused", err.Error())
+			return nil, err
+		}
 		inReplyTo, references = computeReplyChain(thread, msg.ReplyTo)
 	}
 
@@ -101,13 +105,18 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 
 	var to []netmail.Address
 	var cc []netmail.Address
+	var dropped []string
 	if dmMode {
 		to, err = resolveDMRecipients(thread, selves)
 	} else {
-		to, cc, err = resolveReplyAllRecipients(thread, selves)
+		to, cc, dropped, err = resolveReplyAllRecipients(thread, selves)
 	}
 	if err != nil {
 		return nil, err
+	}
+	if len(dropped) > 0 {
+		ec.UserLogin.Log.Warn().Strs("dropped", dropped).
+			Msg("recipients dropped: the thread lists addresses that will not parse; they are NOT on this reply")
 	}
 
 	// Pick From: the alias the most recent inbound was addressed to wins
@@ -175,6 +184,13 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 		dedupKey = strings.Trim(serverID, "<>")
 	}
 
+	if err := postSendReceiptToPortal(ctx, ec.UserLogin.Bridge, msg.Portal, fromAddr, to, cc, dropped); err != nil {
+		// The receipt is the only channel telling the user a chat-shaped reply
+		// went out as a reply-all. Its silence must not also be silent.
+		ec.UserLogin.Log.Warn().Err(err).Strs("to", recipientStrs).
+			Msg("send receipt not posted; the user has no record of who this went to")
+	}
+
 	matrixEvtID := ""
 	if msg.Event != nil {
 		matrixEvtID = string(msg.Event.ID)
@@ -199,6 +215,7 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 	// against this newly-sent message rather than against the previous tail.
 	thread.References = append(thread.References, dedupKey)
 	thread.MessageID = dedupKey
+	thread.LastOutboundMessageID = dedupKey
 	if wasDraft {
 		// First-send conversion: thread is now a real thread, not a draft.
 		// Subsequent messages should produce In-Reply-To/References headers
@@ -214,20 +231,22 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 	// References chain. Best-effort; failure is logged but not fatal — the
 	// in-memory cache is still good for at least 24h.
 	pm := &PortalMetadata{
-		ThreadID:        thread.ThreadID,
-		Subject:         thread.Subject,
-		Participants:    append([]string(nil), thread.Participants...),
-		References:      append([]string(nil), thread.References...),
-		LastMessageID:   thread.MessageID,
-		IsDraft:         thread.IsDraft,
-		GmailThreadID:   thread.GmailThreadID,
-		LastFrom:        thread.LastFrom,
-		LastTo:          append([]string(nil), thread.LastTo...),
-		LastCc:          append([]string(nil), thread.LastCc...),
-		LastDeliveredTo: thread.LastDeliveredTo,
-		LastDate:        thread.LastDate,
-		LastTextBody:    thread.LastTextBody,
-		LastHTMLBody:    thread.LastHTMLBody,
+		ThreadID:              thread.ThreadID,
+		Subject:               thread.Subject,
+		Participants:          append([]string(nil), thread.Participants...),
+		References:            append([]string(nil), thread.References...),
+		LastMessageID:         thread.MessageID,
+		IsDraft:               thread.IsDraft,
+		GmailThreadID:         thread.GmailThreadID,
+		LastFrom:              thread.LastFrom,
+		LastTo:                append([]string(nil), thread.LastTo...),
+		LastCc:                append([]string(nil), thread.LastCc...),
+		LastInboundMessageID:  thread.LastInboundMessageID,
+		LastOutboundMessageID: thread.LastOutboundMessageID,
+		LastDeliveredTo:       thread.LastDeliveredTo,
+		LastDate:              thread.LastDate,
+		LastTextBody:          thread.LastTextBody,
+		LastHTMLBody:          thread.LastHTMLBody,
 	}
 	msg.Portal.Metadata = pm
 	if err := msg.Portal.Save(ctx); err != nil {
@@ -306,20 +325,22 @@ func (ec *EmailClient) resolveThreadForPortalWithMetadata(portal *bridgev2.Porta
 		return nil, fmt.Errorf("matrimail: thread %s not found in cache and no portal metadata to restore from", threadID)
 	}
 	thread := &email.EmailThread{
-		ThreadID:        pm.ThreadID,
-		Subject:         pm.Subject,
-		Participants:    append([]string(nil), pm.Participants...),
-		References:      append([]string(nil), pm.References...),
-		MessageID:       pm.LastMessageID,
-		IsDraft:         pm.IsDraft,
-		GmailThreadID:   pm.GmailThreadID,
-		LastFrom:        pm.LastFrom,
-		LastTo:          append([]string(nil), pm.LastTo...),
-		LastCc:          append([]string(nil), pm.LastCc...),
-		LastDeliveredTo: pm.LastDeliveredTo,
-		LastDate:        pm.LastDate,
-		LastTextBody:    pm.LastTextBody,
-		LastHTMLBody:    pm.LastHTMLBody,
+		ThreadID:              pm.ThreadID,
+		Subject:               pm.Subject,
+		Participants:          append([]string(nil), pm.Participants...),
+		References:            append([]string(nil), pm.References...),
+		MessageID:             pm.LastMessageID,
+		IsDraft:               pm.IsDraft,
+		GmailThreadID:         pm.GmailThreadID,
+		LastFrom:              pm.LastFrom,
+		LastTo:                append([]string(nil), pm.LastTo...),
+		LastCc:                append([]string(nil), pm.LastCc...),
+		LastInboundMessageID:  pm.LastInboundMessageID,
+		LastOutboundMessageID: pm.LastOutboundMessageID,
+		LastDeliveredTo:       pm.LastDeliveredTo,
+		LastDate:              pm.LastDate,
+		LastTextBody:          pm.LastTextBody,
+		LastHTMLBody:          pm.LastHTMLBody,
 	}
 	ec.Main.ThreadManager.CacheForReceiver(string(ec.UserLogin.ID), thread)
 	return thread, nil
@@ -351,47 +372,49 @@ func computeReplyChain(thread *email.EmailThread, replyTo *database.Message) (st
 // thread.Participants minus selves as To, no Cc.
 //
 // selves must be a slice of lowercased addresses (primary + aliases).
-func resolveReplyAllRecipients(thread *email.EmailThread, selves []string) ([]netmail.Address, []netmail.Address, error) {
+func resolveReplyAllRecipients(thread *email.EmailThread, selves []string) ([]netmail.Address, []netmail.Address, []string, error) {
 	if thread == nil {
-		return nil, nil, errors.New("matrimail: nil thread")
+		return nil, nil, nil, errors.New("matrimail: nil thread")
 	}
 	selfSet := selvesSet(selves)
+	var dropped []string
+	take := func(raw string, dst *[]netmail.Address, seen map[string]bool) {
+		a, ok, unparseable := parseAddrIfAllowed(raw, selfSet, seen)
+		switch {
+		case ok:
+			*dst = append(*dst, a)
+		case unparseable:
+			dropped = append(dropped, raw)
+		}
+	}
 
 	// Compose-thread / restored-thread fallback path.
 	if strings.TrimSpace(thread.LastFrom) == "" {
 		var to []netmail.Address
 		seen := map[string]bool{}
 		for _, p := range thread.Participants {
-			if a, ok := parseAddrIfAllowed(p, selfSet, seen); ok {
-				to = append(to, a)
-			}
+			take(p, &to, seen)
 		}
 		if len(to) == 0 {
-			return nil, nil, errors.New("matrimail: no recipients (thread participants empty after self-exclusion)")
+			return nil, nil, dropped, noRecipientsError("thread participants empty after self-exclusion", dropped)
 		}
-		return to, nil, nil
+		return to, nil, dropped, nil
 	}
 
 	var to []netmail.Address
 	seen := map[string]bool{}
-	if a, ok := parseAddrIfAllowed(thread.LastFrom, selfSet, seen); ok {
-		to = append(to, a)
-	}
+	take(thread.LastFrom, &to, seen)
 	for _, p := range thread.LastTo {
-		if a, ok := parseAddrIfAllowed(p, selfSet, seen); ok {
-			to = append(to, a)
-		}
+		take(p, &to, seen)
 	}
 	var cc []netmail.Address
 	for _, p := range thread.LastCc {
-		if a, ok := parseAddrIfAllowed(p, selfSet, seen); ok {
-			cc = append(cc, a)
-		}
+		take(p, &cc, seen)
 	}
 	if len(to) == 0 && len(cc) == 0 {
-		return nil, nil, errors.New("matrimail: no recipients (reply-all set empty after self-exclusion)")
+		return nil, nil, dropped, noRecipientsError("reply-all set empty after self-exclusion", dropped)
 	}
-	return to, cc, nil
+	return to, cc, dropped, nil
 }
 
 // resolveDMRecipients computes the recipient set for a DM-mode reply: only
@@ -406,7 +429,7 @@ func resolveDMRecipients(thread *email.EmailThread, selves []string) ([]netmail.
 	}
 	selfSet := selvesSet(selves)
 	seen := map[string]bool{}
-	if a, ok := parseAddrIfAllowed(thread.LastFrom, selfSet, seen); ok {
+	if a, ok, _ := parseAddrIfAllowed(thread.LastFrom, selfSet, seen); ok {
 		return []netmail.Address{a}, nil
 	}
 	return nil, errors.New("matrimail: DM mode target was either unparseable or one of the user's own addresses")
@@ -423,23 +446,39 @@ func selvesSet(selves []string) map[string]bool {
 	return out
 }
 
+// noRecipientsError explains an empty recipient set. When every candidate
+// failed to parse, "empty after self-exclusion" is simply false and hides the
+// evidence, so the unparseable entries are named instead.
+func noRecipientsError(reason string, dropped []string) error {
+	if len(dropped) > 0 {
+		return fmt.Errorf("matrimail: no recipients — %d address(es) on this thread could not be parsed: %s",
+			len(dropped), strings.Join(dropped, ", "))
+	}
+	return fmt.Errorf("matrimail: no recipients (%s)", reason)
+}
+
 // parseAddrIfAllowed parses a "Name <addr>" / "addr" string, filters self
 // addresses, and dedupes against `seen` (lowercased addr-key). Returns
 // (Address, true) when the entry should be included.
-func parseAddrIfAllowed(raw string, selves, seen map[string]bool) (netmail.Address, bool) {
+//
+// A parse failure means a recipient the thread listed is being dropped, which
+// is materially different from filtering out ourselves or a duplicate. It is
+// returned separately so the caller can tell the user rather than lose them
+// silently -- the failure this whole file exists to stop.
+func parseAddrIfAllowed(raw string, selves, seen map[string]bool) (addr netmail.Address, ok bool, unparseable bool) {
 	a, err := netmail.ParseAddress(raw)
 	if err != nil {
-		return netmail.Address{}, false
+		return netmail.Address{}, false, true
 	}
 	key := strings.ToLower(a.Address)
 	if selves[key] {
-		return netmail.Address{}, false
+		return netmail.Address{}, false, false
 	}
 	if seen[key] {
-		return netmail.Address{}, false
+		return netmail.Address{}, false, false
 	}
 	seen[key] = true
-	return *a, true
+	return *a, true, false
 }
 
 // pickFromAddress returns (address, displayName) for the outbound From
@@ -580,4 +619,39 @@ func (ec *EmailClient) downloadMediaAsAttachment(ctx context.Context, content *e
 		Data:        data,
 		Disposition: "attachment",
 	}, nil
+}
+
+// checkReplyTargetResolvable refuses an outbound whose Matrix reply points at
+// a message other than the one the thread's Last* fields describe.
+//
+// Recipients for a reply are resolved from thread.LastFrom/LastTo/LastCc,
+// which track the most recent inbound. An explicit reply to any older message
+// was previously still addressed from that newest state -- so replying to a
+// funder's question in a long thread went out to whoever happened to be on the
+// latest message, quoting an unrelated one. Per-message recipients are not
+// stored anywhere, so they cannot be recovered; refusing is the only honest
+// option. Replying to our own most recent send is fine: the Last* fields still
+// describe the correct inbound to answer. Note this cannot be thread.MessageID:
+// that holds the thread's *first* message until a send overwrites it, so using
+// it would wave through a reply to the oldest message in any thread we have not
+// yet replied in -- exactly the over-share this guard exists to stop.
+func checkReplyTargetResolvable(thread *email.EmailThread, replyTo *database.Message) error {
+	if thread == nil || replyTo == nil {
+		return nil
+	}
+	target := strings.TrimPrefix(string(replyTo.ID), "email:")
+	if target == "" {
+		return nil
+	}
+	if target == thread.LastInboundMessageID || (thread.LastOutboundMessageID != "" && target == thread.LastOutboundMessageID) {
+		return nil
+	}
+	if thread.LastInboundMessageID == "" {
+		// Nothing to compare against (restored thread predating this field).
+		// Fall through rather than refuse every reply in an old room.
+		return nil
+	}
+	return errors.New("matrimail: replying to an older message in this thread is not supported — " +
+		"its recipients are not stored, and answering from the newest message's recipients could " +
+		"reach people who were not on the message you replied to. Reply to the most recent message instead")
 }

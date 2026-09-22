@@ -63,7 +63,7 @@ func TestResolveReplyAll_FallbackToParticipants_SkipsSelfCaseInsensitive(t *test
 	thread := &email.EmailThread{
 		Participants: []string{"alice@example.com", "BOB@example.com", "self@example.com"},
 	}
-	to, cc, err := resolveReplyAllRecipients(thread, []string{"self@example.com"})
+	to, cc, _, err := resolveReplyAllRecipients(thread, []string{"self@example.com"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestResolveReplyAll_FallbackToParticipants_SkipsSelfCaseInsensitive(t *test
 
 func TestResolveReplyAll_ErrorsWhenEmpty(t *testing.T) {
 	thread := &email.EmailThread{Participants: []string{"self@example.com"}}
-	_, _, err := resolveReplyAllRecipients(thread, []string{"self@example.com"})
+	_, _, _, err := resolveReplyAllRecipients(thread, []string{"self@example.com"})
 	if err == nil {
 		t.Fatal("expected error when no recipients remain after self-exclusion")
 	}
@@ -100,7 +100,7 @@ func TestResolveReplyAll_SplitsToAndCc(t *testing.T) {
 		LastCc:   []string{"carol@example.com", "ALIAS@example.com", "alice@example.com"},
 	}
 	// "self" plus "alias" are both treated as the user.
-	to, cc, err := resolveReplyAllRecipients(thread, []string{"self@example.com", "alias@example.com"})
+	to, cc, _, err := resolveReplyAllRecipients(thread, []string{"self@example.com", "alias@example.com"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

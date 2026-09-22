@@ -66,6 +66,17 @@ type EmailThread struct {
 	LastTo []string
 	// LastCc is the Cc header of the most recent inbound.
 	LastCc []string
+	// LastInboundMessageID is the Message-ID of the inbound that produced the
+	// LastFrom/LastTo/LastCc/LastTextBody values above. The outbound path uses
+	// it to check that an explicit Matrix reply targets the message those
+	// fields actually describe; replying to any older message would otherwise
+	// be addressed from the wrong recipient set.
+	LastInboundMessageID string
+	// LastOutboundMessageID is the Message-ID of the most recent message we
+	// sent in this thread. Distinct from MessageID, which is the thread's
+	// first message until a send overwrites it -- so it cannot be used to mean
+	// "our own last send".
+	LastOutboundMessageID string
 
 	// LastDate is the Date header of the most recent inbound. Drives the
 	// Gmail-style "On <date>, <sender> wrote:" attribution line on the next
@@ -458,6 +469,7 @@ func (tm *ThreadManager) addToExistingThread(thread *EmailThread, email *ParsedE
 	}
 		thread.LastTo = append([]string(nil), email.To...)
 		thread.LastCc = append([]string(nil), email.Cc...)
+	thread.LastInboundMessageID = email.MessageID
 	if !email.Date.IsZero() {
 		thread.LastDate = email.Date
 	}
@@ -521,6 +533,7 @@ func (tm *ThreadManager) createNewThread(email *ParsedEmail) *EmailThread {
 		LastFrom:        email.From,
 		LastTo:          append([]string(nil), email.To...),
 		LastCc:          append([]string(nil), email.Cc...),
+		LastInboundMessageID: email.MessageID,
 		LastDate:        email.Date,
 		LastTextBody:    capBody(email.TextContent),
 		LastHTMLBody:    capBody(email.HTMLContent),
