@@ -195,10 +195,6 @@ func (ec *EmailConnector) Init(bridge *bridgev2.Bridge) {
 		bridge.Log.Error().Err(err).Msg("Database is not writable. Fix filesystem permissions or remove stale DB files, then restart the bridge.")
 		panic(fmt.Errorf("database not writable: %w", err))
 	}
-	// Best-effort: add index for faster message lookups by (network, remote_id) if schema matches.
-	if _, err := bridge.DB.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_message_network_remote ON message(network, remote_id)`); err == nil {
-		bridge.Log.Trace().Msg("Ensured index idx_message_network_remote on message(network, remote_id)")
-	}
 	// Refuse to run with a passphrase that cannot read the credentials already
 	// stored. Carrying on orphans every one of them, and for a Gmail account
 	// the lost credential is unrecoverable.
