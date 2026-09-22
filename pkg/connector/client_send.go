@@ -305,24 +305,7 @@ func (ec *EmailClient) resolveThreadForPortalWithMetadata(portal *bridgev2.Porta
 	if !ok || pm == nil || pm.ThreadID == "" || pm.ThreadID != threadID {
 		return nil, fmt.Errorf("matrimail: thread %s not found in cache and no portal metadata to restore from", threadID)
 	}
-	thread := &email.EmailThread{
-		ThreadID:              pm.ThreadID,
-		Subject:               pm.Subject,
-		Participants:          append([]string(nil), pm.Participants...),
-		References:            append([]string(nil), pm.References...),
-		MessageID:             pm.LastMessageID,
-		IsDraft:               pm.IsDraft,
-		GmailThreadID:         pm.GmailThreadID,
-		LastFrom:              pm.LastFrom,
-		LastTo:                append([]string(nil), pm.LastTo...),
-		LastCc:                append([]string(nil), pm.LastCc...),
-		LastInboundMessageID:  pm.LastInboundMessageID,
-		LastOutboundMessageID: pm.LastOutboundMessageID,
-		LastDeliveredTo:       pm.LastDeliveredTo,
-		LastDate:              pm.LastDate,
-		LastTextBody:          pm.LastTextBody,
-		LastHTMLBody:          pm.LastHTMLBody,
-	}
+	thread := ThreadFromPortalMetadata(pm)
 	ec.Main.ThreadManager.CacheForReceiver(string(ec.UserLogin.ID), thread)
 	return thread, nil
 }

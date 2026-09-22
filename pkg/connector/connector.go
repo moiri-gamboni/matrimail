@@ -564,24 +564,7 @@ func (ec *EmailConnector) GetChatInfo(ctx context.Context, portal *bridgev2.Port
 		// still functional after a bridge restart or long idle.
 		if thread == nil && portal != nil {
 			if pm, ok := portal.Metadata.(*PortalMetadata); ok && pm != nil && pm.ThreadID == threadID {
-				thread = &email.EmailThread{
-					ThreadID:              pm.ThreadID,
-					Subject:               pm.Subject,
-					Participants:          append([]string(nil), pm.Participants...),
-					References:            append([]string(nil), pm.References...),
-					MessageID:             pm.LastMessageID,
-					IsDraft:               pm.IsDraft,
-					GmailThreadID:         pm.GmailThreadID,
-					LastFrom:              pm.LastFrom,
-					LastTo:                append([]string(nil), pm.LastTo...),
-					LastCc:                append([]string(nil), pm.LastCc...),
-					LastInboundMessageID:  pm.LastInboundMessageID,
-					LastOutboundMessageID: pm.LastOutboundMessageID,
-					LastDate:              pm.LastDate,
-					LastTextBody:          pm.LastTextBody,
-					LastHTMLBody:          pm.LastHTMLBody,
-					LastDeliveredTo:       pm.LastDeliveredTo,
-				}
+				thread = ThreadFromPortalMetadata(pm)
 				ec.ThreadManager.CacheForReceiver(string(userLogin.ID), thread)
 				ec.Bridge.Log.Debug().
 					Str("thread_id", threadID).
