@@ -21,6 +21,7 @@ func TestPortalMetadataFromThread_CoversEveryReplyContextField(t *testing.T) {
 	t.Parallel()
 
 	// Populated with distinctive, non-zero values so "copied" is detectable.
+	unpopulated := map[string]string{}
 	thread := &email.EmailThread{}
 	tv := reflect.ValueOf(thread).Elem()
 	tt := tv.Type()
@@ -42,6 +43,11 @@ func TestPortalMetadataFromThread_CoversEveryReplyContextField(t *testing.T) {
 			if f.Type() == reflect.TypeOf(time.Time{}) {
 				f.Set(reflect.ValueOf(time.Unix(1750000000, 0).UTC()))
 			}
+		default:
+			// Any other kind cannot be given a distinctive value here, so
+			// "still zero" would not mean "not copied". Recorded so the gap is
+			// visible instead of producing a false failure.
+			unpopulated[tt.Field(i).Name] = f.Kind().String()
 		}
 	}
 
@@ -64,7 +70,20 @@ func TestPortalMetadataFromThread_CoversEveryReplyContextField(t *testing.T) {
 		// Only the reply context matters here. The participant-delta fields are
 		// per-email churn for room membership and are deliberately not stored;
 		// InReplyTo and Cc belong to the compose path, not to addressing a reply.
-		if len(name) < 4 || name[:4] != "Last" {
+		// MessageID has no Last prefix and is exactly the field whose meaning
+		// the batch had to correct, so it is checked explicitly rather than
+		// falling outside the filter.
+		if name != "MessageID" && (len(name) < 4 || name[:4] != "Last") {
+			continue
+		}
+		if name == "MessageID" {
+			if pv.FieldByName("LastMessageID").IsZero() {
+				t.Error("EmailThread.MessageID is not copied into the snapshot as LastMessageID")
+			}
+			continue
+		}
+		if kind, cannot := unpopulated[name]; cannot {
+			t.Logf("cannot assert %s (kind %s): extend the populator if this field carries reply context", name, kind)
 			continue
 		}
 		if why, skip := notReplyContext[name]; skip {

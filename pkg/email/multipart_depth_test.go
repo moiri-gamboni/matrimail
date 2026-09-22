@@ -1,7 +1,6 @@
 package email
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
 	"testing"
@@ -69,13 +68,44 @@ func TestParseMultipartContent_NestingIsBounded(t *testing.T) {
 func TestParseMultipartAttachments_NestingIsBounded(t *testing.T) {
 	t.Parallel()
 	p := testProcessor()
-	deep, deepBoundary := nestedMultipart(maxMultipartDepth+500, "unreachable")
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = p.parseMultipartAttachments(bytes.NewReader([]byte(deep)), deepBoundary)
-	}()
-	<-done
+
+	// An attachment nested one level past the cap must not come back; one just
+	// inside it must. Without both halves this test passed with the limit
+	// removed entirely, which is how it was found.
+	inside := nestedMultipartWithAttachment(maxMultipartDepth-2, "inside.txt")
+	if got := p.parseMultipartAttachments(strings.NewReader(inside.body), inside.boundary); len(got) != 1 {
+		t.Fatalf("attachment within the depth limit was not extracted: got %d", len(got))
+	}
+
+	beyond := nestedMultipartWithAttachment(maxMultipartDepth+5, "beyond.txt")
+	if got := p.parseMultipartAttachments(strings.NewReader(beyond.body), beyond.boundary); len(got) != 0 {
+		t.Fatalf("recursed past the depth limit: extracted %d attachment(s)", len(got))
+	}
+}
+
+type nestedFixture struct{ body, boundary string }
+
+// nestedMultipartWithAttachment puts a single attachment at the deepest level,
+// so its presence or absence reports exactly whether the parser descended.
+func nestedMultipartWithAttachment(depth int, filename string) nestedFixture {
+	leaf := "Content-Type: text/plain\r\n" +
+		"Content-Disposition: attachment; filename=\"" + filename + "\"\r\n\r\n" +
+		"payload\r\n"
+	cur := leaf
+	for i := depth; i >= 1; i-- {
+		b := fmt.Sprintf("b%d", i)
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "--%s\r\n", b)
+		if i == depth {
+			sb.WriteString(cur)
+		} else {
+			fmt.Fprintf(&sb, "Content-Type: multipart/mixed; boundary=\"b%d\"\r\n\r\n", i+1)
+			sb.WriteString(cur)
+		}
+		fmt.Fprintf(&sb, "--%s--\r\n", b)
+		cur = sb.String()
+	}
+	return nestedFixture{body: cur, boundary: "b1"}
 }
 
 // Breadth is bounded too: the per-part size limit says nothing about how many
