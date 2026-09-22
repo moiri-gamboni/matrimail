@@ -519,14 +519,41 @@ func (p *Processor) parseMIMEContent(data []byte) (textContent, htmlContent stri
 	}
 }
 
-// parseMultipartContent parses multipart MIME content
+// maxMultipartDepth bounds how far the two multipart parsers will recurse.
+// Nesting costs an attacker about fifty bytes per level, and each level reads
+// the remaining bytes, so an unbounded parser turns a small message into
+// quadratic work and eventually a stack overflow -- which no recover() can
+// catch. Real mail nests three or four deep; twenty is far past anything
+// legitimate.
+const maxMultipartDepth = 20
+
+// maxPartsPerLevel bounds the breadth of a single multipart container for the
+// same reason depth is bounded: the per-part size limit says nothing about how
+// many parts there are.
+const maxPartsPerLevel = 200
+
+// parseMultipartContent parses multipart MIME content.
 func (p *Processor) parseMultipartContent(body io.Reader, boundary string) (textContent, htmlContent string) {
+	return p.parseMultipartContentDepth(body, boundary, 0)
+}
+
+func (p *Processor) parseMultipartContentDepth(body io.Reader, boundary string, depth int) (textContent, htmlContent string) {
 	if boundary == "" {
 		return "[Multipart message with no boundary]", ""
 	}
+	if depth >= maxMultipartDepth {
+		p.log.Warn().Int("depth", depth).Msg("multipart nesting limit reached; not recursing further")
+		return "[Multipart nesting too deep]", ""
+	}
 
 	mr := multipart.NewReader(body, boundary)
+	parts := 0
 	for {
+		if parts >= maxPartsPerLevel {
+			p.log.Warn().Int("parts", parts).Msg("multipart part limit reached; ignoring the rest of this container")
+			break
+		}
+		parts++
 		part, err := mr.NextPart()
 		if err != nil {
 			if err == io.EOF {
@@ -555,7 +582,7 @@ func (p *Processor) parseMultipartContent(body io.Reader, boundary string) (text
 		switch {
 		case strings.HasPrefix(mediaType, "multipart/"):
 			// Recurse into nested multiparts (e.g., multipart/alternative inside multipart/mixed)
-			childText, childHTML := p.parseMultipartContent(bytes.NewReader(partData), params["boundary"])
+			childText, childHTML := p.parseMultipartContentDepth(bytes.NewReader(partData), params["boundary"], depth+1)
 			if textContent == "" && childText != "" {
 				textContent = childText
 			}
@@ -641,12 +668,26 @@ func (p *Processor) extractMultipartAttachments(data []byte) []*EmailAttachment 
 	return attachments
 }
 
-// parseMultipartAttachments parses multipart content for attachments
+// parseMultipartAttachments parses multipart content for attachments.
 func (p *Processor) parseMultipartAttachments(body io.Reader, boundary string) []*EmailAttachment {
+	return p.parseMultipartAttachmentsDepth(body, boundary, 0)
+}
+
+func (p *Processor) parseMultipartAttachmentsDepth(body io.Reader, boundary string, depth int) []*EmailAttachment {
 	var attachments []*EmailAttachment
+	if depth >= maxMultipartDepth {
+		p.log.Warn().Int("depth", depth).Msg("multipart nesting limit reached; not extracting deeper attachments")
+		return attachments
+	}
 
 	mr := multipart.NewReader(body, boundary)
+	parts := 0
 	for {
+		if parts >= maxPartsPerLevel {
+			p.log.Warn().Int("parts", parts).Msg("multipart part limit reached; ignoring the rest of this container")
+			break
+		}
+		parts++
 		part, err := mr.NextPart()
 		if err != nil {
 			if err == io.EOF {
@@ -688,7 +729,7 @@ func (p *Processor) parseMultipartAttachments(body io.Reader, boundary string) [
 			childBoundary := params["boundary"]
 			// Only recurse if this looks like current message structure, not quoted content
 			if !p.isQuotedContent(dataBytes) {
-				attachments = append(attachments, p.parseMultipartAttachments(bytes.NewReader(dataBytes), childBoundary)...)
+				attachments = append(attachments, p.parseMultipartAttachmentsDepth(bytes.NewReader(dataBytes), childBoundary, depth+1)...)
 			}
 			continue
 		}
