@@ -333,6 +333,68 @@ func getSalt() ([]byte, error) {
 	return salt, nil
 }
 
+// VerifyKeyMatchesStoredCredentials refuses to continue when the passphrase
+// currently in effect cannot decrypt credentials that are already stored.
+//
+// Nothing re-encrypts stored rows when the passphrase changes. Set
+// MATRIMAIL_PASSPHRASE to a different value, or start with the data directory's
+// passphrase file missing so a fresh one is generated, and every stored
+// credential silently becomes unreadable: an app password the user has to find
+// again, or a Gmail refresh token that cannot be recovered at all. Before this
+// check the bridge started anyway and reported the damage one account at a
+// time, as ordinary decrypt failures, long after the cause.
+//
+// A wrong passphrase fails every row, so one successful decrypt is proof the
+// key is right and a single corrupt row is not mistaken for it. A database
+// holding no encrypted credentials yet is a fresh install and passes.
+func (eaq *EmailAccountQuery) VerifyKeyMatchesStoredCredentials(ctx context.Context) error {
+	rows, err := eaq.DB.Query(ctx, dialectQuery(eaq.DB.Dialect, `
+		SELECT COALESCE(password, ''), COALESCE(oauth_refresh_token, '') FROM email_accounts
+	`))
+	if err != nil {
+		return fmt.Errorf("read stored credentials: %w", err)
+	}
+	defer rows.Close()
+
+	var stored []string
+	for rows.Next() {
+		var password, refresh string
+		if err := rows.Scan(&password, &refresh); err != nil {
+			return fmt.Errorf("read stored credentials: %w", err)
+		}
+		stored = append(stored, password, refresh)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read stored credentials: %w", err)
+	}
+	return keyMatchesStored(stored, decryptString)
+}
+
+// keyMatchesStored holds the decision so it can be tested; the key is derived
+// once per process, so a test cannot exercise the real thing with two different
+// passphrases.
+func keyMatchesStored(stored []string, decrypt func(string) (string, error)) error {
+	encrypted := 0
+	for _, v := range stored {
+		if !strings.HasPrefix(v, encPrefix) {
+			continue
+		}
+		encrypted++
+		if _, err := decrypt(v); err == nil {
+			return nil
+		}
+	}
+	if encrypted == 0 {
+		return nil
+	}
+	return fmt.Errorf("the passphrase in use cannot decrypt any of the %d stored credentials. "+
+		"Nothing re-encrypts them when the passphrase changes, so this almost certainly means "+
+		"MATRIMAIL_PASSPHRASE now holds a different value than when these accounts were added, or the "+
+		"data directory's passphrase file was lost and a new one was generated. Restore the previous "+
+		"passphrase and the accounts will work again; without it they cannot be recovered and each "+
+		"account has to be logged in again", encrypted)
+}
+
 func encryptString(plain string) (string, error) {
 	key, err := getDBKey()
 	if err != nil {

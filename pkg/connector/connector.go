@@ -199,6 +199,13 @@ func (ec *EmailConnector) Init(bridge *bridgev2.Bridge) {
 	if _, err := bridge.DB.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_message_network_remote ON message(network, remote_id)`); err == nil {
 		bridge.Log.Trace().Msg("Ensured index idx_message_network_remote on message(network, remote_id)")
 	}
+	// Refuse to run with a passphrase that cannot read the credentials already
+	// stored. Carrying on orphans every one of them, and for a Gmail account
+	// the lost credential is unrecoverable.
+	if err := ec.DB.VerifyKeyMatchesStoredCredentials(ctx); err != nil {
+		bridge.Log.Error().Err(err).Msg("Encryption passphrase does not match the stored credentials. Restore the previous passphrase and restart.")
+		panic(fmt.Errorf("passphrase does not match stored credentials: %w", err))
+	}
 	if _, err := bridge.DB.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_messages_network_remote ON messages(network, remote_id)`); err == nil {
 		bridge.Log.Trace().Msg("Ensured index idx_messages_network_remote on messages(network, remote_id)")
 	}
