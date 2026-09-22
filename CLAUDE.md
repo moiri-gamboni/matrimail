@@ -11,8 +11,8 @@ The framework's portal/message DB schema keys on `NetworkID = "email"`. That str
 ## Build / test / run
 
 ```bash
-make build                      # builds ./matrimail (uses CGO + libolm; auto-detects libolm path on macOS/Linux)
-make test                       # go test ./... with the same CGO env
+make build                      # builds ./matrimail (CGO for go-sqlite3; no system libraries needed)
+make test                       # go test ./... with the goolm tag
 make clean
 go test ./pkg/connector/...     # single package
 go test ./pkg/email/ -run TestThreadingExtractRefs  # single test by regex
@@ -21,9 +21,13 @@ go test ./pkg/email/ -run TestThreadingExtractRefs  # single test by regex
 
 `build.sh` differs from `make build` by setting `maunium.net/go/mautrix.GoModVersion` via `-X`. Use it when you need the framework to report the correct mautrix version (e.g. release builds); `make build` is fine for local iteration.
 
-### libolm is mandatory
+### Build with `goolm`, and keep CGO on
 
-CGO must be enabled and link against `libolm` (Debian: `libolm-dev`; macOS: `brew install libolm`). **Never build with `nocrypto`** — the bridge requires E2EE support to function correctly against real homeservers. The Makefile errors out fast if libolm headers aren't found.
+Every build entry point passes `-tags goolm`, mautrix-go's pure-Go Olm implementation. Without that tag mautrix-go links `libolm`, the deprecated C library, which then has to be installed to build and shipped to run. Nothing here needs a system crypto library; don't reintroduce one.
+
+CGO must stay enabled even so, because `go-sqlite3` is a cgo package and SQLite is the default database. A `CGO_ENABLED=0` binary compiles and then fails to open its own database.
+
+**Never build with `nocrypto`** — the bridge needs E2EE support to work against real homeservers.
 
 ### First run / config generation
 
@@ -91,4 +95,4 @@ When changing the login flow, search for `LoginStep` constants and the state mac
 - Logger is `zerolog`. Get it from the bridgev2 context (`zerolog.Ctx(ctx)`); don't construct package-level loggers.
 - Use `pkg/logging.SanitizeForLog` (or equivalent) before logging email subjects, addresses, headers, or bodies.
 - IMAP and email parsing surface bytes — be explicit about charset decoding (the `processor.go` MIME path has helpers).
-- Don't add code paths that depend on `nocrypto` builds compiling. The repo is libolm-or-nothing.
+- Don't add code paths that depend on `nocrypto` builds compiling. Crypto is always present; it is `goolm` rather than `libolm`.

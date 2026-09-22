@@ -6,18 +6,8 @@ set -euo pipefail
 echo "📨 Matrimail Setup"
 echo "========================="
 
-# Check if running on macOS and install libolm if needed
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo "📦 Checking for libolm..."
-    if ! brew list libolm > /dev/null 2>&1; then
-        echo "Installing libolm via Homebrew..."
-        brew install libolm
-    else
-        echo "✅ libolm already installed"
-    fi
-fi
-
-# Build the bridge
+# Build the bridge. No system crypto library to install first: the build uses
+# the goolm tag, a pure-Go Olm implementation.
 echo "🔨 Building Matrimail..."
 make build
 
