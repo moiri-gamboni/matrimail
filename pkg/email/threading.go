@@ -27,7 +27,7 @@ type EmailThread struct {
 	ThreadID  string   // Message-ID of the first email in thread
 	Subject   string   // Email subject line
 	Participants []string // List of email addresses currently active in thread
-	MessageID string   // Current message ID
+	MessageID    string   // Newest message in the thread, inbound or outbound
 	InReplyTo string   // Message this is replying to (for threading)
 	References []string // Full thread chain
 
@@ -470,6 +470,15 @@ func (tm *ThreadManager) addToExistingThread(thread *EmailThread, email *ParsedE
 		thread.LastTo = append([]string(nil), email.To...)
 		thread.LastCc = append([]string(nil), email.Cc...)
 	thread.LastInboundMessageID = email.MessageID
+	// MessageID means "the newest message in this thread" -- see its doc
+	// comment. It was previously written only when the thread was created and
+	// when we sent, so in a thread nobody had replied in it still held the
+	// *first* message. The send path uses it as the In-Reply-To target, so a
+	// plain reply threaded against the thread root, and persisting it on every
+	// inbound stored that root under a field named last_message_id.
+	if email.MessageID != "" {
+		thread.MessageID = email.MessageID
+	}
 	if !email.Date.IsZero() {
 		thread.LastDate = email.Date
 	}

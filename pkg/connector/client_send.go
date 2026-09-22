@@ -230,26 +230,7 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 	// ThreadManager TTL eviction (or a bridge restart) doesn't lose the
 	// References chain. Best-effort; failure is logged but not fatal — the
 	// in-memory cache is still good for at least 24h.
-	pm := &PortalMetadata{
-		ThreadID:              thread.ThreadID,
-		Subject:               thread.Subject,
-		Participants:          append([]string(nil), thread.Participants...),
-		References:            append([]string(nil), thread.References...),
-		LastMessageID:         thread.MessageID,
-		IsDraft:               thread.IsDraft,
-		GmailThreadID:         thread.GmailThreadID,
-		LastFrom:              thread.LastFrom,
-		LastTo:                append([]string(nil), thread.LastTo...),
-		LastCc:                append([]string(nil), thread.LastCc...),
-		LastInboundMessageID:  thread.LastInboundMessageID,
-		LastOutboundMessageID: thread.LastOutboundMessageID,
-		LastDeliveredTo:       thread.LastDeliveredTo,
-		LastDate:              thread.LastDate,
-		LastTextBody:          thread.LastTextBody,
-		LastHTMLBody:          thread.LastHTMLBody,
-	}
-	msg.Portal.Metadata = pm
-	if err := msg.Portal.Save(ctx); err != nil {
+	if err := PersistThreadState(ctx, msg.Portal, thread); err != nil {
 		ec.UserLogin.Log.Warn().Err(err).Msg("save portal metadata failed; thread state will only persist via ThreadManager cache (24h TTL)")
 	}
 
@@ -324,24 +305,7 @@ func (ec *EmailClient) resolveThreadForPortalWithMetadata(portal *bridgev2.Porta
 	if !ok || pm == nil || pm.ThreadID == "" || pm.ThreadID != threadID {
 		return nil, fmt.Errorf("matrimail: thread %s not found in cache and no portal metadata to restore from", threadID)
 	}
-	thread := &email.EmailThread{
-		ThreadID:              pm.ThreadID,
-		Subject:               pm.Subject,
-		Participants:          append([]string(nil), pm.Participants...),
-		References:            append([]string(nil), pm.References...),
-		MessageID:             pm.LastMessageID,
-		IsDraft:               pm.IsDraft,
-		GmailThreadID:         pm.GmailThreadID,
-		LastFrom:              pm.LastFrom,
-		LastTo:                append([]string(nil), pm.LastTo...),
-		LastCc:                append([]string(nil), pm.LastCc...),
-		LastInboundMessageID:  pm.LastInboundMessageID,
-		LastOutboundMessageID: pm.LastOutboundMessageID,
-		LastDeliveredTo:       pm.LastDeliveredTo,
-		LastDate:              pm.LastDate,
-		LastTextBody:          pm.LastTextBody,
-		LastHTMLBody:          pm.LastHTMLBody,
-	}
+	thread := ThreadFromPortalMetadata(pm)
 	ec.Main.ThreadManager.CacheForReceiver(string(ec.UserLogin.ID), thread)
 	return thread, nil
 }
@@ -631,10 +595,9 @@ func (ec *EmailClient) downloadMediaAsAttachment(ctx context.Context, content *e
 // latest message, quoting an unrelated one. Per-message recipients are not
 // stored anywhere, so they cannot be recovered; refusing is the only honest
 // option. Replying to our own most recent send is fine: the Last* fields still
-// describe the correct inbound to answer. Note this cannot be thread.MessageID:
-// that holds the thread's *first* message until a send overwrites it, so using
-// it would wave through a reply to the oldest message in any thread we have not
-// yet replied in -- exactly the over-share this guard exists to stop.
+// describe the correct inbound to answer. The check uses LastInboundMessageID
+// rather than MessageID because MessageID is the newest message in either
+// direction, while the Last* fields describe the newest inbound specifically.
 func checkReplyTargetResolvable(thread *email.EmailThread, replyTo *database.Message) error {
 	if thread == nil || replyTo == nil {
 		return nil

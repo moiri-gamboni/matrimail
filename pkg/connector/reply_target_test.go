@@ -18,12 +18,11 @@ func msgRef(id string) *database.Message {
 func TestCheckReplyTargetResolvable(t *testing.T) {
 	t.Parallel()
 	thread := &email.EmailThread{
-		LastInboundMessageID: "newest-inbound@example.com",
-		// Deliberately not MessageID: that holds the thread's *first* message
-		// until a send overwrites it, so allowing it would wave through a reply
-		// to the oldest message in any thread we have not yet replied in.
+		LastInboundMessageID:  "newest-inbound@example.com",
 		LastOutboundMessageID: "our-last-send@example.com",
-		MessageID:             "thread-first-message@example.com",
+		// Deliberately neither of the two IDs the guard accepts, so the case
+		// below checks that the guard never falls back to MessageID.
+		MessageID: "some-other-message@example.com",
 	}
 
 	for _, tc := range []struct {
@@ -35,7 +34,7 @@ func TestCheckReplyTargetResolvable(t *testing.T) {
 		{"reply to the newest inbound", msgRef("newest-inbound@example.com"), false},
 		{"reply to our own last send", msgRef("our-last-send@example.com"), false},
 		{"reply to an older message", msgRef("three-messages-ago@example.com"), true},
-		{"reply to the thread's first message, never replied in", msgRef("thread-first-message@example.com"), true},
+		{"reply to the message MessageID names", msgRef("some-other-message@example.com"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := checkReplyTargetResolvable(thread, tc.replyTo)
