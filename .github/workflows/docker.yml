@@ -42,6 +42,10 @@ jobs:
   build:
     name: Build & push
     runs-on: ubuntu-latest
+    # Inert on forks. This publishes to the registry namespace of whatever
+    # repository it runs in, so on a fork it would start shipping images under
+    # the fork owner's name. Upstream behaviour is unchanged.
+    if: github.repository == 'Leicas/matrimail'
 
     steps:
       - name: Checkout

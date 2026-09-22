@@ -46,6 +46,10 @@ jobs:
   release:
     name: semantic-release
     runs-on: ubuntu-latest
+    # Inert on forks. semantic-release tags the repository it runs in and
+    # pushes a changelog commit back to main, so on a fork it would cut
+    # releases of someone else's project under the fork owner's name.
+    if: github.repository == 'Leicas/matrimail'
     outputs:
       new_release_published: ${{ steps.semantic.outputs.new_release_published }}
       new_release_version: ${{ steps.semantic.outputs.new_release_version }}
