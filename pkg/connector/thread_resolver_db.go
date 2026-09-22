@@ -39,7 +39,7 @@ type DBThreadMetadataResolver struct {
 // plural table, so every arm failed on an unknown column and the errors were
 // discarded as "schema didn't match, best effort". The resolver therefore
 // answered "no match" to every query ever made of it, and because a miss is a
-// legitimate answer here, nothing upstream could tell the difference: the
+// legitimate answer here, nothing calling it could tell the difference: the
 // symptom was the restart behaviour above, with no error anywhere.
 //
 // Going through the framework's own typed query instead of any SQL is what

@@ -24,7 +24,7 @@ import (
 // filtered on `network`, `remote_id` and `receiver`. None of those columns or
 // the plural table exist. Every query failed on an unknown column, the error
 // was discarded as an expected schema mismatch, and the function returned "no
-// match" -- which is a valid answer, so nothing upstream could tell that it had
+// match" -- which is a valid answer, so nothing calling it could tell that it had
 // never once returned anything else. No unit test over hand-built structs can
 // see that; the query has to meet the schema.
 
