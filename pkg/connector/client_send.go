@@ -230,25 +230,7 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 	// ThreadManager TTL eviction (or a bridge restart) doesn't lose the
 	// References chain. Best-effort; failure is logged but not fatal — the
 	// in-memory cache is still good for at least 24h.
-	pm := &PortalMetadata{
-		ThreadID:              thread.ThreadID,
-		Subject:               thread.Subject,
-		Participants:          append([]string(nil), thread.Participants...),
-		References:            append([]string(nil), thread.References...),
-		LastMessageID:         thread.MessageID,
-		IsDraft:               thread.IsDraft,
-		GmailThreadID:         thread.GmailThreadID,
-		LastFrom:              thread.LastFrom,
-		LastTo:                append([]string(nil), thread.LastTo...),
-		LastCc:                append([]string(nil), thread.LastCc...),
-		LastInboundMessageID:  thread.LastInboundMessageID,
-		LastOutboundMessageID: thread.LastOutboundMessageID,
-		LastDeliveredTo:       thread.LastDeliveredTo,
-		LastDate:              thread.LastDate,
-		LastTextBody:          thread.LastTextBody,
-		LastHTMLBody:          thread.LastHTMLBody,
-	}
-	msg.Portal.Metadata = pm
+	msg.Portal.Metadata = PortalMetadataFromThread(thread)
 	if err := msg.Portal.Save(ctx); err != nil {
 		ec.UserLogin.Log.Warn().Err(err).Msg("save portal metadata failed; thread state will only persist via ThreadManager cache (24h TTL)")
 	}

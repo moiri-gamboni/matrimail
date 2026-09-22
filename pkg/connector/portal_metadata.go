@@ -12,7 +12,14 @@
 // migrating older rows.
 package connector
 
-import "time"
+import (
+	"context"
+	"time"
+
+	"maunium.net/go/mautrix/bridgev2"
+
+	"github.com/Leicas/matrimail/pkg/email"
+)
 
 // PortalMetadata mirrors the parts of email.EmailThread that are useful to
 // reconstruct a thread from cold storage. Kept narrow on purpose: the
@@ -80,4 +87,48 @@ type PortalMetadata struct {
 	// LastHTMLBody is the html body of the most recent inbound, capped at
 	// email.MaxQuoteBodyBytes.
 	LastHTMLBody string `json:"last_html_body,omitempty"`
+}
+
+// PortalMetadataFromThread snapshots a thread's reply context for persistence.
+//
+// This must be written on every event that changes the context, not only on
+// send. Writing it on send alone leaves the stored copy describing the world as
+// of the user's last reply: after a restart, a room whose newest event is
+// inbound rehydrates from that stale copy, and an ordinary typed reply is
+// addressed from recipients the sender has since dropped -- the same
+// over-share the unconditional Last* assignment in addToExistingThread exists
+// to prevent, reached by a different route.
+func PortalMetadataFromThread(thread *email.EmailThread) *PortalMetadata {
+	if thread == nil {
+		return nil
+	}
+	return &PortalMetadata{
+		ThreadID:              thread.ThreadID,
+		Subject:               thread.Subject,
+		Participants:          append([]string(nil), thread.Participants...),
+		References:            append([]string(nil), thread.References...),
+		LastMessageID:         thread.MessageID,
+		IsDraft:               thread.IsDraft,
+		GmailThreadID:         thread.GmailThreadID,
+		LastFrom:              thread.LastFrom,
+		LastTo:                append([]string(nil), thread.LastTo...),
+		LastCc:                append([]string(nil), thread.LastCc...),
+		LastInboundMessageID:  thread.LastInboundMessageID,
+		LastOutboundMessageID: thread.LastOutboundMessageID,
+		LastDeliveredTo:       thread.LastDeliveredTo,
+		LastDate:              thread.LastDate,
+		LastTextBody:          thread.LastTextBody,
+		LastHTMLBody:          thread.LastHTMLBody,
+	}
+}
+
+// PersistThreadState writes the thread's reply context onto the portal. Called
+// from both inbound paths; best-effort, because losing the snapshot degrades to
+// the in-memory cache rather than breaking delivery.
+func PersistThreadState(ctx context.Context, portal *bridgev2.Portal, thread *email.EmailThread) error {
+	if portal == nil || thread == nil {
+		return nil
+	}
+	portal.Metadata = PortalMetadataFromThread(thread)
+	return portal.Save(ctx)
 }

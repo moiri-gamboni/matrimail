@@ -146,6 +146,14 @@ type Client struct {
 	AccessToken   string
 	TokenProvider func(context.Context) (string, error) // optional
 
+	// PersistThreadState is called after an inbound message has been threaded
+	// and its portal resolved, so the thread's reply context reaches disk on
+	// receive and not only on send. Set by the connector, which owns the
+	// metadata shape; nil disables persistence (the in-memory cache still
+	// serves until its TTL or the next restart). Injected rather than imported
+	// because the connector already depends on this package.
+	PersistThreadState func(context.Context, *bridgev2.Portal, *emailpkg.EmailThread) error
+
 	// Logging/sanitization
 	sanitized bool
 	secret    string
@@ -1440,6 +1448,13 @@ func (c *Client) processMessageWith(ctx context.Context, cli *imapclient.Client,
 		if err := c.ensurePortalRoom(ctx, portal); err != nil {
 			c.log.Error().Err(err).Str("portal_key", string(portalKey.ID)).Msg("Failed to ensure Matrix room exists for portal")
 			return err
+		}
+
+		if c.PersistThreadState != nil {
+			if err := c.PersistThreadState(ctx, portal, emailMessage.Thread); err != nil {
+				c.log.Warn().Err(err).
+					Msg("could not persist thread state on inbound; a restart before the next send will reply from stale recipients")
+			}
 		}
 
 		// Queue the event with the bridge framework

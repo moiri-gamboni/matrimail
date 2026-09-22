@@ -196,6 +196,16 @@ func (m *GmailInboundManager) handleMessage(ctx context.Context, login *bridgev2
 		}
 	}
 
+	// Persist the reply context now, not only when the user sends. Otherwise
+	// the stored copy describes the world as of their last reply, and after a
+	// restart an ordinary typed reply is addressed from recipients this very
+	// message may have dropped.
+	if err := PersistThreadState(ctx, portal, emailMsg.Thread); err != nil {
+		m.connector.Bridge.Log.Warn().Err(err).
+			Str("portal_key", string(emailMsg.PortalKey.ID)).
+			Msg("could not persist thread state on inbound; a restart before the next send will reply from stale recipients")
+	}
+
 	if !login.QueueRemoteEvent(matrixEvent).Success {
 		return fmt.Errorf("queue remote event failed for message %s", emailMsg.MessageID)
 	}

@@ -263,6 +263,7 @@ func (ec *EmailConnector) createIMAPClient(emailClient *EmailClient, login *brid
 			}
 			return fresh.AccessToken, nil
 		})
+		imapClient.PersistThreadState = PersistThreadState
 		emailClient.IMAPClient = imapClient
 		if ec.Processor != nil {
 			emailClient.IMAPClient.SetProcessor(ec.Processor)
@@ -287,6 +288,7 @@ func (ec *EmailConnector) createIMAPClient(emailClient *EmailClient, login *brid
 		return fmt.Errorf("failed to create IMAP client: %w", err)
 	}
 
+	imapClient.PersistThreadState = PersistThreadState
 	emailClient.IMAPClient = imapClient
 
 	// Set the email processor on the IMAP client
