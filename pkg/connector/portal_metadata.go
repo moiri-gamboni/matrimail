@@ -14,6 +14,7 @@ package connector
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"maunium.net/go/mautrix/bridgev2"
@@ -122,13 +123,120 @@ func PortalMetadataFromThread(thread *email.EmailThread) *PortalMetadata {
 	}
 }
 
+// persistMu serialises the read-modify-write below.
+//
+// Until persisting on receive was added, the send path was the only writer to
+// Portal.Metadata and it ran on the portal's own event goroutine. There are now
+// two more writers — the Gmail poller and the IMAP idle loop — and bridgev2's
+// Portal has no lock covering Metadata. Without this, an inbound arriving
+// alongside a send can save a snapshot taken before the send, dropping that
+// send from References and clearing LastOutboundMessageID, after which the
+// reply guard refuses a reply to the user's own last message. The symptom
+// appears in no log.
+var persistMu sync.Mutex
+
 // PersistThreadState writes the thread's reply context onto the portal. Called
-// from both inbound paths; best-effort, because losing the snapshot degrades to
-// the in-memory cache rather than breaking delivery.
+// from the send path and from both inbound paths; best-effort, because losing
+// the snapshot degrades to the in-memory cache rather than breaking delivery.
+//
+// Fields are merged rather than assigned, per the rules on
+// mergePortalMetadata. The caller does not always hold the whole thread:
+// resolution can hand back a skeleton carrying only a ThreadID and Subject
+// (threading.go builds one when an external resolver names a thread that is not
+// in cache), and assigning that over the stored row would wipe the References
+// chain, the Gmail thread id and the alias to reply from — permanently, because
+// the row is the last copy.
 func PersistThreadState(ctx context.Context, portal *bridgev2.Portal, thread *email.EmailThread) error {
 	if portal == nil || thread == nil {
 		return nil
 	}
-	portal.Metadata = PortalMetadataFromThread(thread)
+	persistMu.Lock()
+	defer persistMu.Unlock()
+
+	prev, _ := portal.Metadata.(*PortalMetadata)
+	portal.Metadata = mergePortalMetadata(prev, PortalMetadataFromThread(thread))
 	return portal.Save(ctx)
+}
+
+// mergePortalMetadata folds a fresh snapshot onto the stored one.
+//
+// Split out from PersistThreadState only so it can be tested: exercising the
+// real function needs a live bridgev2.Portal and a database behind Save, which
+// is how the wholesale-overwrite bug this fixes reached the tree untested.
+//
+// The rule differs per field on purpose, and the division is the whole point:
+//
+//   - Thread identity (References, GmailThreadID, LastDeliveredTo, Subject,
+//     Participants, LastMessageID, LastOutboundMessageID) accumulates. An empty
+//     incoming value means the caller did not know it, not that it is gone, so
+//     the stored value wins. References compares length rather than emptiness
+//     because the inbound path rebuilds the chain from one message's headers
+//     and can hand back a shorter-but-non-empty one.
+//   - The Last* recipient fields (LastFrom, LastTo, LastCc,
+//     LastInboundMessageID) are replaced wholesale, empties included. Clearing
+//     them on absence is the recipient-stickiness fix itself: an inbound with
+//     no Cc: must erase the previous Cc, or a reply reaches someone the sender
+//     deliberately dropped. Merging them would reintroduce that bug through the
+//     storage layer.
+func mergePortalMetadata(prev, next *PortalMetadata) *PortalMetadata {
+	if next == nil {
+		return prev
+	}
+	if prev == nil {
+		return next
+	}
+	if len(next.References) < len(prev.References) {
+		next.References = append([]string(nil), prev.References...)
+	}
+	if next.GmailThreadID == "" {
+		next.GmailThreadID = prev.GmailThreadID
+	}
+	if next.LastDeliveredTo == "" {
+		next.LastDeliveredTo = prev.LastDeliveredTo
+	}
+	if next.LastOutboundMessageID == "" {
+		next.LastOutboundMessageID = prev.LastOutboundMessageID
+	}
+	if next.LastMessageID == "" {
+		next.LastMessageID = prev.LastMessageID
+	}
+	if next.Subject == "" {
+		next.Subject = prev.Subject
+	}
+	if len(next.Participants) == 0 {
+		next.Participants = append([]string(nil), prev.Participants...)
+	}
+	return next
+}
+
+// ThreadFromPortalMetadata is the inverse of PortalMetadataFromThread.
+//
+// Kept beside it deliberately: the two restore sites previously held this
+// literal twice, and they had already drifted -- one gained LastDate and the
+// quoted bodies while the other went without, so a thread restored through the
+// second path replied with no quote. A field added to one direction and not the
+// other is silent, and the reflection test over the forward direction cannot
+// see the inverse.
+func ThreadFromPortalMetadata(pm *PortalMetadata) *email.EmailThread {
+	if pm == nil {
+		return nil
+	}
+	return &email.EmailThread{
+		ThreadID:              pm.ThreadID,
+		Subject:               pm.Subject,
+		Participants:          append([]string(nil), pm.Participants...),
+		References:            append([]string(nil), pm.References...),
+		MessageID:             pm.LastMessageID,
+		IsDraft:               pm.IsDraft,
+		GmailThreadID:         pm.GmailThreadID,
+		LastFrom:              pm.LastFrom,
+		LastTo:                append([]string(nil), pm.LastTo...),
+		LastCc:                append([]string(nil), pm.LastCc...),
+		LastInboundMessageID:  pm.LastInboundMessageID,
+		LastOutboundMessageID: pm.LastOutboundMessageID,
+		LastDeliveredTo:       pm.LastDeliveredTo,
+		LastDate:              pm.LastDate,
+		LastTextBody:          pm.LastTextBody,
+		LastHTMLBody:          pm.LastHTMLBody,
+	}
 }
