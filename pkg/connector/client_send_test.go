@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"maunium.net/go/mautrix/bridgev2/database"
+	"maunium.net/go/mautrix/bridgev2/networkid"
+
 	"github.com/Leicas/matrimail/pkg/email"
 	"github.com/Leicas/matrimail/pkg/imap"
 )
@@ -150,27 +153,56 @@ func TestResolveDM_ErrorsWhenLastFromEmpty(t *testing.T) {
 	}
 }
 
+// The explicit-reply branch, which the reply-target guard now depends on: the
+// guard permits a reply aimed at the newest inbound, and this is what turns
+// that Matrix reply into In-Reply-To. It was previously asserted by a test of
+// this name that passed nil and exercised the fallback instead, so the branch
+// had no coverage at all while reading as though it did.
 func TestComputeReplyChain_PrefersExplicitReply(t *testing.T) {
 	thread := &email.EmailThread{
 		MessageID:  "tail@example.com",
 		References: []string{"root@example.com", "mid@example.com"},
 	}
-	// Simulate database.Message indirectly via inline shim
-	// We craft the helper without depending on database.Message here.
-	// Direct call:
-	parent := "explicit-parent@example.com"
-	references := append([]string{}, thread.References...)
-	references = append(references, parent)
+	replyTo := &database.Message{ID: networkid.MessageID("email:explicit-parent@example.com")}
 
-	// Verify the helper does the same thing for the explicit-reply case by
-	// invoking the function with a minimal stand-in. computeReplyChain takes
-	// a *database.Message; we test with nil first to cover the fallback path.
+	inReplyTo, refs := computeReplyChain(thread, replyTo)
+
+	// The explicit parent wins over the thread tail, and the "email:" prefix
+	// the bridge uses for its network IDs must not reach the wire.
+	if inReplyTo != "explicit-parent@example.com" {
+		t.Errorf("inReplyTo = %q, want explicit-parent@example.com", inReplyTo)
+	}
+	if len(refs) != 3 {
+		t.Fatalf("refs = %+v, want the two existing references plus the explicit parent", refs)
+	}
+	if refs[2] != "explicit-parent@example.com" {
+		t.Errorf("refs tail = %q, want the explicit parent", refs[2])
+	}
+	if refs[0] != "root@example.com" || refs[1] != "mid@example.com" {
+		t.Errorf("refs = %+v, want the existing chain preserved ahead of the parent", refs)
+	}
+	// The tail is deliberately absent: an explicit reply threads against the
+	// message the user replied to, not against the newest one.
+	for _, r := range refs {
+		if r == "tail@example.com" {
+			t.Errorf("refs = %+v; the thread tail must not be appended when a reply target is given", refs)
+		}
+	}
+}
+
+// The fallback the old test was actually exercising, kept under a name that
+// says so.
+func TestComputeReplyChain_FallsBackToThreadTail(t *testing.T) {
+	thread := &email.EmailThread{
+		MessageID:  "tail@example.com",
+		References: []string{"root@example.com", "mid@example.com"},
+	}
 	inReplyTo, refs := computeReplyChain(thread, nil)
 	if inReplyTo != "tail@example.com" {
-		t.Errorf("nil reply: inReplyTo = %q, want tail@example.com", inReplyTo)
+		t.Errorf("inReplyTo = %q, want tail@example.com", inReplyTo)
 	}
 	if len(refs) != 3 || refs[2] != "tail@example.com" {
-		t.Errorf("nil reply: refs = %+v", refs)
+		t.Errorf("refs = %+v, want the chain plus the tail", refs)
 	}
 }
 
