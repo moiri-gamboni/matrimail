@@ -48,7 +48,7 @@ This is the easiest way if you're already using Beeper's bridge system.
 **What you need first:**
 
 - Beeper Bridge Manager installed and logged in: `bbctl login`
-- Go 1.22+ and libolm on your system
+- Go 1.22+. No system crypto library is needed: the build uses `goolm`, a pure-Go Olm implementation.
 
 **Step-by-step setup:**
 
@@ -60,7 +60,6 @@ This is the easiest way if you're already using Beeper's bridge system.
    ```
 2. **What setup.sh does:**
 
-   - Installs libolm if you're on macOS and don't have it
    - Builds the bridge binary (creates `./matrimail`)
    - Creates a `./data/` folder in your project directory
    - Asks you for a bridge name (just pick something like `my-email-bridge` - this is NOT your email address)
@@ -97,7 +96,6 @@ This is the easiest way if you're already using Beeper's bridge system.
 Prerequisites:
 
 - Go 1.22+
-- libolm
 - A Matrix homeserver you control (standard mode) or Beeper hungryserv (websocket mode)
 
 Steps:
@@ -231,7 +229,7 @@ Notes:
 
 ## Security and runtime notes
 
-- Never build or run with nocrypto. libolm is required for proper E2EE support.
+- Never build or run with nocrypto. E2EE support is required, and is provided by the `goolm` build tag.
 - The Docker image runs as a non-root user; data directory permissions are handled by the image and compose volume mapping.
 - **Encryption passphrase:** Set `MATRIMAIL_PASSPHRASE` environment variable in production, or the bridge will auto-generate one and store it in a file.
 
