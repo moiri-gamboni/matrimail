@@ -1,0 +1,82 @@
+name: CI
+
+# Build, vet and test on every push and pull request.
+#
+# The repository had no such workflow: docker.yml builds an image and
+# release.yml cuts releases, and neither runs `go test`. The suite existed and
+# was never enforced, which is why a package-level variable swapped by six
+# parallel tests could fail two runs in five without anyone noticing.
+#
+# Everything here builds with `-tags goolm`, the pure-Go crypto backend. The
+# Makefile and Dockerfile link libolm instead; this deployment does not, so
+# CI tests what actually ships.
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+      - "harden/**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build, vet & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Needed by the gofmt step below, which diffs against the base ref.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Tracks go.mod rather than pinning a version here, so the toolchain
+          # cannot drift away from what the module declares.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build -tags goolm ./...
+
+      - name: Vet
+        run: go vet -tags goolm ./...
+
+      - name: Test
+        run: go test -tags goolm -count=1 ./...
+
+      # Separate from the plain run: the race detector is the only thing that
+      # would have caught the parallel-test endpoint swap, and it is cheap here
+      # (the suite is seconds, not minutes).
+      - name: Test with the race detector
+        run: go test -tags goolm -race -count=1 ./...
+
+      # Formatting is checked only on files this change touches. Fifteen files
+      # inherited from upstream are unformatted, and reformatting them wholesale
+      # would collide with every future merge from upstream for no benefit.
+      - name: Check formatting of changed files
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only --diff-filter=ACMR "$BASE" "$HEAD" -- '*.go')"
+          if [ -z "$changed" ]; then
+            echo "No Go files changed."
+            exit 0
+          fi
+          echo "Checking:"; echo "$changed"
+          unformatted="$(gofmt -l $changed)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"
+            gofmt -d $changed
+            exit 1
+          fi
+          echo "All changed files are formatted."
