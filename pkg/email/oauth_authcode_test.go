@@ -141,7 +141,6 @@ func TestBuildAuthURL_MissingFields(t *testing.T) {
 }
 
 func TestExchangeCode_Success(t *testing.T) {
-	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.FormValue("grant_type"); got != "authorization_code" {
 			t.Errorf("grant_type = %q", got)
@@ -173,7 +172,6 @@ func TestExchangeCode_Success(t *testing.T) {
 }
 
 func TestExchangeCode_NoRefreshToken(t *testing.T) {
-	t.Parallel()
 	// Google sometimes returns no refresh_token (e.g. when the user has
 	// already consented and didn't get re-prompted). We refuse to persist
 	// because that would set up a 1h-then-die account.
@@ -195,7 +193,6 @@ func TestExchangeCode_NoRefreshToken(t *testing.T) {
 }
 
 func TestExchangeCode_Error(t *testing.T) {
-	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -215,7 +212,6 @@ func TestExchangeCode_Error(t *testing.T) {
 }
 
 func TestExchangeRefreshToken_Success(t *testing.T) {
-	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.FormValue("grant_type"); got != "refresh_token" {
 			t.Errorf("grant_type = %q", got)
@@ -239,7 +235,6 @@ func TestExchangeRefreshToken_Success(t *testing.T) {
 }
 
 func TestRevokeToken(t *testing.T) {
-	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.FormValue("token") != "TOK" {
 			t.Errorf("token = %q", r.FormValue("token"))
@@ -255,7 +250,6 @@ func TestRevokeToken(t *testing.T) {
 }
 
 func TestRevokeToken_AlreadyInvalid(t *testing.T) {
-	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"error":"invalid_token"}`))
