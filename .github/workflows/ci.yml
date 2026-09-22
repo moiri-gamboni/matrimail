@@ -1,0 +1,79 @@
+name: CI
+
+# Build, vet and test on every push to main and every pull request.
+#
+# docker.yml builds an image and release.yml cuts releases; neither runs
+# `go test`, so the suite was never enforced. That is how six parallel tests
+# swapping a package-level endpoint variable could fail two runs in five
+# without anyone noticing.
+#
+# Built with the `goolm` tag, mautrix-go's pure-Go Olm implementation, so the
+# runner needs no system crypto library.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build, vet & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Needed by the formatting step below, which diffs against the base.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          # Tracks go.mod rather than pinning a version here, so the toolchain
+          # cannot drift away from what the module declares.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build -tags goolm ./...
+
+      - name: Vet
+        run: go vet -tags goolm ./...
+
+      - name: Test
+        run: go test -tags goolm -count=1 ./...
+
+      # The race detector is what catches tests interfering with each other
+      # through shared package state, and the suite runs in seconds.
+      - name: Test with the race detector
+        run: go test -tags goolm -race -count=1 ./...
+
+      # Only files a pull request adds are checked. Several existing files are
+      # not gofmt-clean, and gofmt reports on whole files, so checking every
+      # modified file would force each contributor to reformat an entire file
+      # to change one line of it.
+      - name: Check formatting of added files
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          added="$(git diff --name-only --diff-filter=A "$BASE" "$HEAD" -- '*.go')"
+          if [ -z "$added" ]; then
+            echo "No Go files added."
+            exit 0
+          fi
+          echo "Checking:"; echo "$added"
+          unformatted="$(gofmt -l $added)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"
+            gofmt -d $added
+            exit 1
+          fi
+          echo "All added files are formatted."
