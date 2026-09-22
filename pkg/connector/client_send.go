@@ -30,6 +30,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
 
+	"github.com/Leicas/matrimail/pkg/common"
 	"github.com/Leicas/matrimail/pkg/email"
 )
 
@@ -236,7 +237,7 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 
 	return &bridgev2.MatrixMessageResponse{
 		DB: &database.Message{
-			ID:        networkid.MessageID("email:" + dedupKey),
+			ID:        common.EmailToMessageID(dedupKey),
 			SenderID:  MakeUserID(ec.Email),
 			Timestamp: time.Now(),
 		},
@@ -316,7 +317,7 @@ func (ec *EmailClient) resolveThreadForPortalWithMetadata(portal *bridgev2.Porta
 func computeReplyChain(thread *email.EmailThread, replyTo *database.Message) (string, []string) {
 	references := append([]string(nil), thread.References...)
 	if replyTo != nil {
-		parentID := strings.TrimPrefix(string(replyTo.ID), "email:")
+		parentID := common.MessageIDFromNetworkID(replyTo.ID)
 		references = append(references, parentID)
 		return parentID, references
 	}
@@ -603,7 +604,7 @@ func checkReplyTargetResolvable(thread *email.EmailThread, replyTo *database.Mes
 	if thread == nil || replyTo == nil {
 		return nil
 	}
-	target := strings.TrimPrefix(string(replyTo.ID), "email:")
+	target := common.MessageIDFromNetworkID(replyTo.ID)
 	if target == "" {
 		return nil
 	}

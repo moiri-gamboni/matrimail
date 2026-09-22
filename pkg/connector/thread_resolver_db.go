@@ -8,6 +8,8 @@ import (
 	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
+
+	"github.com/Leicas/matrimail/pkg/common"
 )
 
 // DBThreadMetadataResolver resolves an email Message-ID to the thread whose
@@ -56,11 +58,11 @@ func (r *DBThreadMetadataResolver) ResolveThreadID(receiver, messageID string) (
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Messages are stored under the "email:" namespace (see the networkid.MessageID
-	// built in processor.go). The bare ID is tried second for rows written
-	// before that prefix existed.
-	for _, rid := range []string{"email:" + mid, mid} {
-		msg, err := r.Bridge.DB.Message.GetFirstPartByID(ctx, networkid.UserLoginID(receiver), networkid.MessageID(rid))
+	// Built through the same constructor the inbound and outbound paths store
+	// under, so the lookup key cannot drift away from the stored one. The bare
+	// ID is tried second for rows written before that prefix existed.
+	for _, rid := range []networkid.MessageID{common.EmailToMessageID(mid), networkid.MessageID(mid)} {
+		msg, err := r.Bridge.DB.Message.GetFirstPartByID(ctx, networkid.UserLoginID(receiver), rid)
 		if err != nil {
 			// A real failure, not a miss. Reported rather than swallowed: the
 			// consequence is silent (threads quietly start landing in new
@@ -80,7 +82,7 @@ func (r *DBThreadMetadataResolver) ResolveThreadID(receiver, messageID string) (
 			if r.Log != nil {
 				r.Log.Debug().
 					Str("receiver", receiver).
-					Str("remote_id", rid).
+					Str("remote_id", string(rid)).
 					Str("thread_id", tid).
 					Msg("thread resolver: matched a previously bridged message")
 			}

@@ -278,7 +278,7 @@ func (p *Processor) ProcessParsedEmail(ctx context.Context, parsedEmail *ParsedE
 	}
 
 	// Step 3: Create network message ID
-	networkMessageID := networkid.MessageID(fmt.Sprintf("email:%s", parsedEmail.MessageID))
+	networkMessageID := common.EmailToMessageID(parsedEmail.MessageID)
 
 	// Step 4: Check if this is an outbound message
 	isOutbound := p.isOutboundMessage(mailbox)

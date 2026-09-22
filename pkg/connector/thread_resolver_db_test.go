@@ -7,6 +7,8 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog"
+
+	"github.com/Leicas/matrimail/pkg/common"
 	"go.mau.fi/util/dbutil"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
@@ -84,7 +86,9 @@ func bridgeMessage(t *testing.T, br *bridgev2.Bridge, receiver networkid.UserLog
 func TestDBThreadResolver_FindsAPreviouslyBridgedMessage(t *testing.T) {
 	br := newTestBridge(t)
 	const receiver networkid.UserLoginID = "moiri@apartresearch.com"
-	bridgeMessage(t, br, receiver, "thread:original@example.com", "email:parent@example.com")
+	// Stored through the same constructor the inbound path uses, so this asserts
+	// the resolver reads back what that constructor writes.
+	bridgeMessage(t, br, receiver, "thread:original@example.com", common.EmailToMessageID("parent@example.com"))
 
 	log := zerolog.Nop()
 	r := &DBThreadMetadataResolver{Bridge: br, Log: &log}
@@ -106,7 +110,7 @@ func TestDBThreadResolver_FindsAPreviouslyBridgedMessage(t *testing.T) {
 func TestDBThreadResolver_UnknownMessageDoesNotMatch(t *testing.T) {
 	br := newTestBridge(t)
 	const receiver networkid.UserLoginID = "moiri@apartresearch.com"
-	bridgeMessage(t, br, receiver, "thread:original@example.com", "email:parent@example.com")
+	bridgeMessage(t, br, receiver, "thread:original@example.com", common.EmailToMessageID("parent@example.com"))
 
 	log := zerolog.Nop()
 	r := &DBThreadMetadataResolver{Bridge: br, Log: &log}
