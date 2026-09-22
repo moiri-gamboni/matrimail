@@ -519,13 +519,48 @@ func (p *Processor) parseMIMEContent(data []byte) (textContent, htmlContent stri
 	}
 }
 
-// parseMultipartContent parses multipart MIME content
+// maxMultipartDepth bounds how far the two multipart parsers will recurse.
+// Nesting costs an attacker about fifty bytes per level, and each level reads
+// the remaining bytes, so an unbounded parser turns a small message into
+// quadratic work and eventually a stack overflow -- which no recover() can
+// catch. Real mail nests three or four deep; twenty is far past anything
+// legitimate.
+const maxMultipartDepth = 20
+
+// maxPartsPerLevel bounds the breadth of a single multipart container for the
+// same reason depth is bounded: the per-part size limit says nothing about how
+// many parts there are. 200 is far past any legitimate message -- the largest
+// honest case is one part per attachment, and mail providers reject attachment
+// counts an order of magnitude below this.
+const maxPartsPerLevel = 200
+
+// parseMultipartContent parses multipart MIME content.
 func (p *Processor) parseMultipartContent(body io.Reader, boundary string) (textContent, htmlContent string) {
+	text, html, truncated := p.parseMultipartContentDepth(body, boundary, 0)
+	if !truncated {
+		return text, html
+	}
+	// Appended once, here, because only the top level knows the whole tree was
+	// walked. Returning the notice as body text from the level that hit the
+	// limit loses it whenever an earlier sibling part already supplied text --
+	// which is the ordinary MIME layout, and the one an attacker would choose.
+	return appendTruncationNotice(text, html,
+		"This message was too deeply nested, or had too many parts, to be parsed in full. Open it in your mail client to read the original.")
+}
+
+// parseMultipartContentDepth reports truncated=true when any level of the tree
+// hit a limit, so the caller can tell the reader once rather than per level.
+func (p *Processor) parseMultipartContentDepth(body io.Reader, boundary string, depth int) (textContent, htmlContent string, truncated bool) {
 	if boundary == "" {
-		return "[Multipart message with no boundary]", ""
+		return "[Multipart message with no boundary]", "", false
+	}
+	if depth >= maxMultipartDepth {
+		p.log.Warn().Int("depth", depth).Msg("multipart nesting limit reached; not recursing further")
+		return "", "", true
 	}
 
 	mr := multipart.NewReader(body, boundary)
+	parts := 0
 	for {
 		part, err := mr.NextPart()
 		if err != nil {
@@ -533,6 +568,15 @@ func (p *Processor) parseMultipartContent(body io.Reader, boundary string) (text
 				break
 			}
 			continue
+		}
+		// Counted after a successful read, so a container holding exactly
+		// maxPartsPerLevel parts is complete and says nothing.
+		parts++
+		if parts > maxPartsPerLevel {
+			p.log.Warn().Int("parts", parts).Msg("multipart part limit reached; ignoring the rest of this container")
+			truncated = true
+			part.Close()
+			break
 		}
 
 		// Decode part body according to Content-Transfer-Encoding with standard email size limit
@@ -555,7 +599,8 @@ func (p *Processor) parseMultipartContent(body io.Reader, boundary string) (text
 		switch {
 		case strings.HasPrefix(mediaType, "multipart/"):
 			// Recurse into nested multiparts (e.g., multipart/alternative inside multipart/mixed)
-			childText, childHTML := p.parseMultipartContent(bytes.NewReader(partData), params["boundary"])
+			childText, childHTML, childTruncated := p.parseMultipartContentDepth(bytes.NewReader(partData), params["boundary"], depth+1)
+			truncated = truncated || childTruncated
 			if textContent == "" && childText != "" {
 				textContent = childText
 			}
@@ -573,6 +618,29 @@ func (p *Processor) parseMultipartContent(body io.Reader, boundary string) (text
 		}
 	}
 
+	return textContent, htmlContent, truncated
+}
+
+// truncationNotice formats a bridge-side limit as something a reader can act
+// on. A truncated message that says nothing is indistinguishable from a short
+// one, which is the failure mode these limits exist to avoid trading for.
+func truncationNotice(what string) string {
+	return "⚠️ " + what
+}
+
+// appendTruncationNotice adds the notice to both bodies. Matrix clients render
+// formatted_body when it is present, so a plain-text-only notice is invisible
+// in every client that shows HTML -- which is most of them.
+func appendTruncationNotice(textContent, htmlContent, what string) (string, string) {
+	note := truncationNotice(what)
+	if textContent == "" {
+		textContent = note
+	} else {
+		textContent += "\n\n" + note
+	}
+	if htmlContent != "" {
+		htmlContent += "<p>" + html.EscapeString(note) + "</p>"
+	}
 	return textContent, htmlContent
 }
 
@@ -641,11 +709,20 @@ func (p *Processor) extractMultipartAttachments(data []byte) []*EmailAttachment 
 	return attachments
 }
 
-// parseMultipartAttachments parses multipart content for attachments
+// parseMultipartAttachments parses multipart content for attachments.
 func (p *Processor) parseMultipartAttachments(body io.Reader, boundary string) []*EmailAttachment {
+	return p.parseMultipartAttachmentsDepth(body, boundary, 0)
+}
+
+func (p *Processor) parseMultipartAttachmentsDepth(body io.Reader, boundary string, depth int) []*EmailAttachment {
 	var attachments []*EmailAttachment
+	if depth >= maxMultipartDepth {
+		p.log.Warn().Int("depth", depth).Msg("multipart nesting limit reached; not extracting deeper attachments")
+		return attachments
+	}
 
 mr := multipart.NewReader(body, boundary)
+	parts := 0
 	for {
 		part, err := mr.NextPart()
 		if err != nil {
@@ -653,6 +730,12 @@ mr := multipart.NewReader(body, boundary)
 				break
 			}
 			continue
+		}
+		parts++
+		if parts > maxPartsPerLevel {
+			p.log.Warn().Int("parts", parts).Msg("multipart part limit reached; ignoring the rest of this container")
+			part.Close()
+			break
 		}
 
 		contentDisposition := part.Header.Get("Content-Disposition")
@@ -688,7 +771,7 @@ mr := multipart.NewReader(body, boundary)
 			childBoundary := params["boundary"]
 			// Only recurse if this looks like current message structure, not quoted content
 			if !p.isQuotedContent(dataBytes) {
-				attachments = append(attachments, p.parseMultipartAttachments(bytes.NewReader(dataBytes), childBoundary)...)
+				attachments = append(attachments, p.parseMultipartAttachmentsDepth(bytes.NewReader(dataBytes), childBoundary, depth+1)...)
 			}
 			continue
 		}

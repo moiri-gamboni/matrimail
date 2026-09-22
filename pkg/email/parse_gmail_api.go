@@ -70,7 +70,7 @@ func ParseGmailAPIMessage(msg *gmail.Message) (*ParsedEmail, error) {
 	}
 
 	// Walk the payload tree for body parts and attachments.
-	walkGmailPayload(msg.Payload, parsed)
+	walkGmailPayload(msg.Payload, parsed, 0)
 
 	// Fall back to the snippet if no body was found (rare, but can happen for
 	// messages with all parts marked as attachments).
@@ -82,8 +82,15 @@ func ParseGmailAPIMessage(msg *gmail.Message) (*ParsedEmail, error) {
 
 // walkGmailPayload recursively descends a gmail.MessagePart, populating
 // TextContent / HTMLContent (first match wins) and Attachments.
-func walkGmailPayload(part *gmail.MessagePart, out *ParsedEmail) {
-	if part == nil {
+//
+// Bounded at the same depth as the MIME parsers in processor.go. The nesting
+// here arrives already decoded by the Gmail client, so the quadratic re-read
+// that motivated the limit there does not apply, and encoding/json's own
+// nesting cap means a hostile message cannot currently reach a stack overflow
+// through this path. That is an accident of a limit in another package, though
+// -- it is not documented as a guarantee and costs nothing to stop relying on.
+func walkGmailPayload(part *gmail.MessagePart, out *ParsedEmail, depth int) {
+	if part == nil || depth >= maxMultipartDepth {
 		return
 	}
 
@@ -100,14 +107,22 @@ func walkGmailPayload(part *gmail.MessagePart, out *ParsedEmail) {
 		// chooses; v1 of the Gmail-API inbound path skips actually attaching
 		// files to keep poll cost low — IMAP mode already covers attachment
 		// fidelity when users need it.
+		// part.Body is optional in the API's schema, and the two text
+		// branches below already guard it. Unguarded here, a part carrying a
+		// filename and no body panics -- inside the poller goroutine, which
+		// takes the bridge down rather than failing one message.
+		var size int64
+		if part.Body != nil {
+			size = part.Body.Size
+		}
 		out.Attachments = append(out.Attachments, &EmailAttachment{
 			Filename:    part.Filename,
 			ContentType: part.MimeType,
-			Size:        part.Body.Size,
+			Size:        size,
 		})
 	case strings.HasPrefix(mimeType, "multipart/"):
 		for _, child := range part.Parts {
-			walkGmailPayload(child, out)
+			walkGmailPayload(child, out, depth+1)
 		}
 	case mimeType == "text/plain":
 		if out.TextContent == "" && part.Body != nil && part.Body.Data != "" {
@@ -124,7 +139,7 @@ func walkGmailPayload(part *gmail.MessagePart, out *ParsedEmail) {
 	default:
 		// Unknown leaf — skip. Recurse if it somehow has children.
 		for _, child := range part.Parts {
-			walkGmailPayload(child, out)
+			walkGmailPayload(child, out, depth+1)
 		}
 	}
 }
