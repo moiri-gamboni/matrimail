@@ -96,7 +96,7 @@ func (n *processorErrorNotifier) NotifyProcessingError(ctx context.Context, rece
 // reply silently becomes a reply-all. Without this line the first indication
 // that a third party was on the Cc is their answer. Best-effort: a failure to
 // post must never fail a send that already happened.
-func postSendReceiptToPortal(ctx context.Context, bridge *bridgev2.Bridge, portal *bridgev2.Portal, from string, to, cc []netmail.Address) error {
+func postSendReceiptToPortal(ctx context.Context, bridge *bridgev2.Bridge, portal *bridgev2.Portal, from string, to, cc []netmail.Address, dropped []string) error {
 	if portal == nil || portal.MXID == "" || bridge == nil {
 		return nil
 	}
@@ -104,12 +104,19 @@ func postSendReceiptToPortal(ctx context.Context, bridge *bridgev2.Bridge, porta
 	if intent == nil {
 		return nil
 	}
-	md := "📤 Sent to " + joinAddrs(to)
+	// "Addressed to", not "Sent to": this reports the recipient set handed to
+	// the server, which is what the reader needs to check. Delivery is a later
+	// and separate event.
+	md := "📤 Addressed to " + joinAddrs(to)
 	if len(cc) > 0 {
 		md += " · cc " + joinAddrs(cc)
 	}
 	if from != "" {
 		md += " · from " + from
+	}
+	if len(dropped) > 0 {
+		md += fmt.Sprintf("\n\n⚠️ %d address(es) on this thread could not be parsed and are **not** on this reply: %s",
+			len(dropped), strings.Join(dropped, ", "))
 	}
 	content := format.RenderMarkdown(md, true, false)
 	content.MsgType = event.MsgNotice
@@ -121,7 +128,9 @@ func postSendReceiptToPortal(ctx context.Context, bridge *bridgev2.Bridge, porta
 
 func joinAddrs(addrs []netmail.Address) string {
 	if len(addrs) == 0 {
-		return "(nobody)"
+		// Reachable: a reply-all can resolve to Cc-only. Saying "nobody" about
+		// a message that did go somewhere is worse than saying nothing.
+		return "(no To: recipients — Cc only)"
 	}
 	parts := make([]string, 0, len(addrs))
 	for _, a := range addrs {

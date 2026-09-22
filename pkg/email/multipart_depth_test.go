@@ -61,7 +61,7 @@ func TestParseMultipartContent_NestingIsBounded(t *testing.T) {
 		deepText, _ = p.parseMultipartContent(strings.NewReader(deep), deepBoundary)
 	}()
 	<-done
-	if !strings.Contains(deepText, "not fully parsed") {
+	if !strings.Contains(deepText, "parsed in full") {
 		t.Errorf("a message we refused to parse must say so; got %q", deepText)
 	}
 }
@@ -94,7 +94,7 @@ func TestParseMultipartContent_PartCountIsBounded(t *testing.T) {
 	}
 	// A truncated message that says nothing reads as a short one. The reader
 	// has to be told, or the limit trades a crash for a silent data loss.
-	if !strings.Contains(text, "not fully parsed") {
+	if !strings.Contains(text, "parsed in full") {
 		t.Errorf("truncation must be visible to the reader; got %q", text)
 	}
 }

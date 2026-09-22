@@ -64,6 +64,8 @@ type PortalMetadata struct {
 	// LastInboundMessageID identifies which inbound the Last* fields describe,
 	// so a restored thread can still refuse a reply aimed at an older message.
 	LastInboundMessageID string `json:"last_inbound_message_id,omitempty"`
+	// LastOutboundMessageID is the most recent message we sent in this thread.
+	LastOutboundMessageID string `json:"last_outbound_message_id,omitempty"`
 	// LastDeliveredTo is the alias the most recent inbound was addressed to;
 	// replies use this as From.
 	LastDeliveredTo string `json:"last_delivered_to,omitempty"`

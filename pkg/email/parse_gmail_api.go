@@ -169,15 +169,20 @@ func splitAddressList(raw string) []string {
 				continue
 			}
 			if a.Name != "" {
-				out = append(out, fmt.Sprintf("%s <%s>", a.Name, a.Address))
+				// Must round-trip through net/mail so a display name containing
+				// a comma ("Doe, John", the Exchange default) is quoted. Emitted
+				// unquoted it fails to re-parse on the send path, where the
+				// recipient is then dropped from reply-all with no log.
+				out = append(out, (&mail.Address{Name: a.Name, Address: a.Address}).String())
 			} else {
 				out = append(out, a.Address)
 			}
 		}
 		return out
 	}
-	// Fallback: dumb split. Loses fidelity for display names with commas
-	// but better than dropping the addresses entirely.
+	// Fallback for input the strict parser rejects: split on commas. This
+	// does lose display names containing commas -- but only here; the branch
+	// above preserves them.
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {

@@ -17,7 +17,6 @@ import (
 	netmail "net/mail"
 	"net/textproto"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -535,34 +534,47 @@ const maxPartsPerLevel = 200
 
 // parseMultipartContent parses multipart MIME content.
 func (p *Processor) parseMultipartContent(body io.Reader, boundary string) (textContent, htmlContent string) {
-	return p.parseMultipartContentDepth(body, boundary, 0)
+	text, html, truncated := p.parseMultipartContentDepth(body, boundary, 0)
+	if !truncated {
+		return text, html
+	}
+	// Appended once, here, because only the top level knows the whole tree was
+	// walked. Returning the notice as body text from the level that hit the
+	// limit loses it whenever an earlier sibling part already supplied text --
+	// which is the ordinary MIME layout, and the one an attacker would choose.
+	return appendTruncationNotice(text, html,
+		"This message was too deeply nested, or had too many parts, to be parsed in full. Open it in your mail client to read the original.")
 }
 
-func (p *Processor) parseMultipartContentDepth(body io.Reader, boundary string, depth int) (textContent, htmlContent string) {
+// parseMultipartContentDepth reports truncated=true when any level of the tree
+// hit a limit, so the caller can tell the reader once rather than per level.
+func (p *Processor) parseMultipartContentDepth(body io.Reader, boundary string, depth int) (textContent, htmlContent string, truncated bool) {
 	if boundary == "" {
-		return "[Multipart message with no boundary]", ""
+		return "[Multipart message with no boundary]", "", false
 	}
 	if depth >= maxMultipartDepth {
 		p.log.Warn().Int("depth", depth).Msg("multipart nesting limit reached; not recursing further")
-		return truncationNotice("This message is nested more than " + strconv.Itoa(maxMultipartDepth) + " levels deep and was not fully parsed. Open it in Gmail to read the original."), ""
+		return "", "", true
 	}
 
 	mr := multipart.NewReader(body, boundary)
 	parts := 0
-	truncatedParts := false
 	for {
-		if parts >= maxPartsPerLevel {
-			p.log.Warn().Int("parts", parts).Msg("multipart part limit reached; ignoring the rest of this container")
-			truncatedParts = true
-			break
-		}
-		parts++
 		part, err := mr.NextPart()
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
 			continue
+		}
+		// Counted after a successful read, so a container holding exactly
+		// maxPartsPerLevel parts is complete and says nothing.
+		parts++
+		if parts > maxPartsPerLevel {
+			p.log.Warn().Int("parts", parts).Msg("multipart part limit reached; ignoring the rest of this container")
+			truncated = true
+			part.Close()
+			break
 		}
 
 		// Decode part body according to Content-Transfer-Encoding with standard email size limit
@@ -585,7 +597,8 @@ func (p *Processor) parseMultipartContentDepth(body io.Reader, boundary string, 
 		switch {
 		case strings.HasPrefix(mediaType, "multipart/"):
 			// Recurse into nested multiparts (e.g., multipart/alternative inside multipart/mixed)
-			childText, childHTML := p.parseMultipartContentDepth(bytes.NewReader(partData), params["boundary"], depth+1)
+			childText, childHTML, childTruncated := p.parseMultipartContentDepth(bytes.NewReader(partData), params["boundary"], depth+1)
+			truncated = truncated || childTruncated
 			if textContent == "" && childText != "" {
 				textContent = childText
 			}
@@ -603,16 +616,7 @@ func (p *Processor) parseMultipartContentDepth(body io.Reader, boundary string, 
 		}
 	}
 
-	if truncatedParts {
-		note := truncationNotice("This message had more than " + strconv.Itoa(maxPartsPerLevel) + " parts and was not fully parsed. Open it in Gmail to read the original.")
-		if textContent == "" {
-			textContent = note
-		} else {
-			textContent += "\n\n" + note
-		}
-	}
-
-	return textContent, htmlContent
+	return textContent, htmlContent, truncated
 }
 
 // truncationNotice formats a bridge-side limit as something a reader can act
@@ -620,6 +624,22 @@ func (p *Processor) parseMultipartContentDepth(body io.Reader, boundary string, 
 // one, which is the failure mode these limits exist to avoid trading for.
 func truncationNotice(what string) string {
 	return "⚠️ " + what
+}
+
+// appendTruncationNotice adds the notice to both bodies. Matrix clients render
+// formatted_body when it is present, so a plain-text-only notice is invisible
+// in every client that shows HTML -- which is most of them.
+func appendTruncationNotice(textContent, htmlContent, what string) (string, string) {
+	note := truncationNotice(what)
+	if textContent == "" {
+		textContent = note
+	} else {
+		textContent += "\n\n" + note
+	}
+	if htmlContent != "" {
+		htmlContent += "<p>" + html.EscapeString(note) + "</p>"
+	}
+	return textContent, htmlContent
 }
 
 // extractAttachments extracts attachments from IMAP body sections
@@ -702,17 +722,18 @@ func (p *Processor) parseMultipartAttachmentsDepth(body io.Reader, boundary stri
 	mr := multipart.NewReader(body, boundary)
 	parts := 0
 	for {
-		if parts >= maxPartsPerLevel {
-			p.log.Warn().Int("parts", parts).Msg("multipart part limit reached; ignoring the rest of this container")
-			break
-		}
-		parts++
 		part, err := mr.NextPart()
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
 			continue
+		}
+		parts++
+		if parts > maxPartsPerLevel {
+			p.log.Warn().Int("parts", parts).Msg("multipart part limit reached; ignoring the rest of this container")
+			part.Close()
+			break
 		}
 
 		contentDisposition := part.Header.Get("Content-Disposition")

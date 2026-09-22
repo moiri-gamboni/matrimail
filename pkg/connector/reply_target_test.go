@@ -19,7 +19,11 @@ func TestCheckReplyTargetResolvable(t *testing.T) {
 	t.Parallel()
 	thread := &email.EmailThread{
 		LastInboundMessageID: "newest-inbound@example.com",
-		MessageID:            "our-last-send@example.com",
+		// Deliberately not MessageID: that holds the thread's *first* message
+		// until a send overwrites it, so allowing it would wave through a reply
+		// to the oldest message in any thread we have not yet replied in.
+		LastOutboundMessageID: "our-last-send@example.com",
+		MessageID:             "thread-first-message@example.com",
 	}
 
 	for _, tc := range []struct {
@@ -31,6 +35,7 @@ func TestCheckReplyTargetResolvable(t *testing.T) {
 		{"reply to the newest inbound", msgRef("newest-inbound@example.com"), false},
 		{"reply to our own last send", msgRef("our-last-send@example.com"), false},
 		{"reply to an older message", msgRef("three-messages-ago@example.com"), true},
+		{"reply to the thread's first message, never replied in", msgRef("thread-first-message@example.com"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := checkReplyTargetResolvable(thread, tc.replyTo)

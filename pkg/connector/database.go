@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -27,9 +28,9 @@ import (
 
 // AuthType identifies which credential mechanism is in use for an email account.
 const (
-	AuthTypePassword              = "password"                  // legacy: SMTP+IMAP via app password / normal password
-	AuthTypeOAuthGmail            = "oauth-gmail"               // Gmail / Workspace via Google OAuth (auth code + PKCE + loopback)
-	AuthTypeOAuthGmailNeedsReauth = "oauth-gmail-needs-reauth"  // refresh token expired/revoked; user must run !matrimail login
+	AuthTypePassword              = "password"                 // legacy: SMTP+IMAP via app password / normal password
+	AuthTypeOAuthGmail            = "oauth-gmail"              // Gmail / Workspace via Google OAuth (auth code + PKCE + loopback)
+	AuthTypeOAuthGmailNeedsReauth = "oauth-gmail-needs-reauth" // refresh token expired/revoked; user must run !matrimail login
 )
 
 // OAuthProvider identifiers persisted in EmailAccount.OAuthProvider.
@@ -138,9 +139,23 @@ func getDBKey() ([]byte, error) {
 		// Step 1: Check environment variable (highest priority for production)
 		passphrase := strings.TrimSpace(os.Getenv("MATRIMAIL_PASSPHRASE"))
 
-		// Step 2: Check for passphrase file if env var not set
+		// Step 2: Check for passphrase file if env var not set.
+		//
+		// "Absent" and "present but unreadable" must not be conflated. A file
+		// that exists and cannot be read -- permissions changed, a volume
+		// mounted late, an I/O error -- used to fall through to step 3, which
+		// then overwrote that very file with a fresh key. That converts a
+		// recoverable state (key intact, temporarily unreadable) into an
+		// unrecoverable one, and for an OAuth account the lost credential is a
+		// mailbox refresh token. Refusing to start is a visible failure;
+		// starting with the wrong key is not.
 		if passphrase == "" {
-			passphrase, _ = readPassphraseFile()
+			p, err := readPassphraseFile()
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				keyErr = fmt.Errorf("passphrase file exists but could not be read (refusing to start rather than overwrite it): %w", err)
+				return
+			}
+			passphrase = p
 		}
 
 		// Step 3: Auto-generate secure passphrase if neither exists
@@ -218,14 +233,22 @@ func readPassphraseFile() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if data, err := os.ReadFile(primary); err == nil {
+	data, err := os.ReadFile(primary)
+	if err == nil {
 		return strings.TrimSpace(string(data)), nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		// The primary key exists and we cannot read it. Falling through to the
+		// legacy location would return that location's not-exist error, which
+		// the caller would read as "no key yet" and regenerate -- overwriting
+		// the very file we failed to read. Report the real error instead.
+		return "", fmt.Errorf("read %s: %w", primary, err)
 	}
 	legacyDir, err := getLegacyConfigDir()
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(filepath.Join(legacyDir, "passphrase"))
+	data, err = os.ReadFile(filepath.Join(legacyDir, "passphrase"))
 	if err != nil {
 		return "", err
 	}
@@ -250,7 +273,19 @@ func generateAndStorePassphrase() (string, error) {
 	if err := os.MkdirAll(filepath.Dir(passphrasePath), 0o700); err != nil {
 		return "", fmt.Errorf("failed to create data directory: %w", err)
 	}
-	if err := os.WriteFile(passphrasePath, []byte(passphrase), 0o600); err != nil {
+	// O_EXCL, not a plain write: auto-generation is a first-run affordance and
+	// has no business replacing an existing key. Without it, any path that
+	// reaches here with a key already on disk silently makes every stored
+	// credential undecryptable.
+	f, err := os.OpenFile(passphrasePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("refusing to generate a passphrase over %s: %w", passphrasePath, err)
+	}
+	if _, err := f.WriteString(passphrase); err != nil {
+		f.Close()
+		return "", fmt.Errorf("failed to write passphrase file: %w", err)
+	}
+	if err := f.Close(); err != nil {
 		return "", fmt.Errorf("failed to write passphrase file: %w", err)
 	}
 

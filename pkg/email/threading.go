@@ -72,6 +72,11 @@ type EmailThread struct {
 	// fields actually describe; replying to any older message would otherwise
 	// be addressed from the wrong recipient set.
 	LastInboundMessageID string
+	// LastOutboundMessageID is the Message-ID of the most recent message we
+	// sent in this thread. Distinct from MessageID, which is the thread's
+	// first message until a send overwrites it -- so it cannot be used to mean
+	// "our own last send".
+	LastOutboundMessageID string
 
 	// LastDate is the Date header of the most recent inbound. Drives the
 	// Gmail-style "On <date>, <sender> wrote:" attribution line on the next
