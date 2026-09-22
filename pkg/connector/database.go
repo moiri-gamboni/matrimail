@@ -250,7 +250,19 @@ func generateAndStorePassphrase() (string, error) {
 	if err := os.MkdirAll(filepath.Dir(passphrasePath), 0o700); err != nil {
 		return "", fmt.Errorf("failed to create data directory: %w", err)
 	}
-	if err := os.WriteFile(passphrasePath, []byte(passphrase), 0o600); err != nil {
+	// O_EXCL, not a plain write: auto-generation is a first-run affordance and
+	// has no business replacing an existing key. Without it, any path that
+	// reaches here with a key already on disk silently makes every stored
+	// credential undecryptable.
+	f, err := os.OpenFile(passphrasePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("refusing to generate a passphrase over %s: %w", passphrasePath, err)
+	}
+	if _, err := f.WriteString(passphrase); err != nil {
+		f.Close()
+		return "", fmt.Errorf("failed to write passphrase file: %w", err)
+	}
+	if err := f.Close(); err != nil {
 		return "", fmt.Errorf("failed to write passphrase file: %w", err)
 	}
 

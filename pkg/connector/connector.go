@@ -375,7 +375,7 @@ func (ec *EmailConnector) createCommands() []commands.CommandHandler {
 			Name: "passphrase",
 			Help: commands.HelpMeta{
 				Section:     HelpSectionAdmin,
-				Description: "Show database encryption passphrase",
+				Description: "Show where the database encryption passphrase is stored (never prints it)",
 			},
 		},
 		&commands.FullHandler{
