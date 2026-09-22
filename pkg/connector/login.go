@@ -160,8 +160,11 @@ Default mode on this bridge: **` + defaultMode + `**.
 ` + "```\nssh -L 8888:127.0.0.1:8888 user@your-bridge-host\n```" + `
 
 …and configure ` + "`gmail_oauth.listener_address: 127.0.0.1:8888`" + ` in your
-matrimail config. Or use the ` + "`!matrimail oauth paste-token`" + ` admin command
-if you can't expose a browser-reachable port at all.
+matrimail config.
+
+If you cannot expose a browser-reachable port at all, ` + "`!matrimail oauth paste-token`" + `
+is a last resort: it works, but the refresh token you type is long-lived,
+grants your whole mailbox, and ends up in that room's history.
 
 *Need help?* ` + "`!matrimail help`"
 }
