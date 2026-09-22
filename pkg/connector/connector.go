@@ -190,6 +190,13 @@ func (ec *EmailConnector) Init(bridge *bridgev2.Bridge) {
 		bridge.Log.Error().Err(err).Msg("Failed to create email_accounts table - bridge initialization failed")
 		panic(fmt.Errorf("database initialization failed: %w", err))
 	}
+	// Refuse to run with a passphrase that cannot read the credentials already
+	// stored. Carrying on orphans every one of them, and for a Gmail account
+	// the lost credential is unrecoverable.
+	if err := ec.DB.VerifyKeyMatchesStoredCredentials(ctx); err != nil {
+		bridge.Log.Error().Err(err).Msg("Encryption passphrase does not match the stored credentials. Restore the previous passphrase and restart.")
+		panic(fmt.Errorf("passphrase does not match stored credentials: %w", err))
+	}
 	// Database health check: ensure we can write to the DB directory to avoid runtime I/O errors
 	if err := ec.checkDBWritable(ctx); err != nil {
 		bridge.Log.Error().Err(err).Msg("Database is not writable. Fix filesystem permissions or remove stale DB files, then restart the bridge.")
