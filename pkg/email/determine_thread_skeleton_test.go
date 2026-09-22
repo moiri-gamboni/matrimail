@@ -57,8 +57,8 @@ func TestDetermineThread_ResolverMissCarriesOnlyTheNewMessage(t *testing.T) {
 
 	// What it does not carry, and the reason the connector merges rather than
 	// assigns. If this ever starts arriving populated the merge is still
-	// correct, but the reachability argument in REVIEW.md would need revisiting
-	// -- so assert the absence rather than leaving it undocumented.
+	// correct, but the reasoning about how reachable the skeleton path is would
+	// need revisiting -- so assert the absence rather than leaving it implicit.
 	if thread.LastOutboundMessageID != "" {
 		t.Errorf("LastOutboundMessageID = %q; the skeleton path is not expected to recover our own sends -- if it now does, revisit the merge rationale",
 			thread.LastOutboundMessageID)
