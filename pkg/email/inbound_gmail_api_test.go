@@ -217,3 +217,24 @@ func TestBacklog_FeedsEachMessageOnceUnderItsOwnLabels(t *testing.T) {
 		t.Errorf("Backlog reported %d fed; want 6", n)
 	}
 }
+
+// Whichever message Backlog feeds last becomes its room's newest event, so it
+// must feed oldest first. Otherwise a thread's older message can land after
+// its newer one and read as the latest word. messages.list documents no order,
+// and the per-label lists interleave, so the order is Gmail's internalDate.
+func TestBacklog_FeedsOldestFirst(t *testing.T) {
+	t.Parallel()
+	g, got := newTestPoller(t, backlogFixture(), "INBOX", "SENT")
+	log := zerolog.Nop()
+
+	if _, err := g.Backlog(context.Background(), 7, &log); err != nil {
+		t.Fatalf("Backlog: %v", err)
+	}
+	var order []string
+	for _, f := range *got {
+		order = append(order, f.id)
+	}
+	if strings.Join(order, ",") != "m1,m2,m3,m4,m5,m6" {
+		t.Errorf("fed in order %v; want oldest first, m1 to m6", order)
+	}
+}

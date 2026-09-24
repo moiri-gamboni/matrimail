@@ -360,7 +360,9 @@ func (g *GmailHistoryPoller) feed(ctx context.Context, msg *gmail.Message, logge
 // labelAdded events that the old (pre-fix) poller dropped — those messages
 // are otherwise unrecoverable without a manual scan.
 //
-// A message under several monitored labels is fed once.
+// Messages are fed oldest first by Gmail's internalDate, because the last one
+// fed becomes its room's newest event; messages.list documents no order. A
+// message under several monitored labels is fed once.
 //
 // Returns the number of messages fed to OnMessage. Errors from individual
 // message fetches are logged and counted as skipped, not returned.
@@ -429,6 +431,7 @@ func (g *GmailHistoryPoller) Backlog(ctx context.Context, lookbackDays int, logg
 		}
 		msgs = append(msgs, full)
 	}
+	sort.SliceStable(msgs, func(i, j int) bool { return msgs[i].InternalDate < msgs[j].InternalDate })
 
 	fed := 0
 	for _, msg := range msgs {
