@@ -245,7 +245,7 @@ func (p *Processor) ProcessParsedEmail(ctx context.Context, parsedEmail *ParsedE
 	// ourselves sent (recorded by HandleMatrixMessage in the connector),
 	// short-circuit before threading + portal work.
 	if p.dedupChecker != nil && isOutbound {
-		if hit, derr := p.dedupChecker.IsOurMessage(ctx, string(userLogin.ID), parsedEmail.MessageID); derr != nil {
+		if hit, derr := p.dedupChecker.IsOurMessage(ctx, receiver, parsedEmail.MessageID); derr != nil {
 			p.log.Warn().Err(derr).Msg("Dedup check failed; falling through and processing message normally")
 		} else if hit {
 			if p.sanitized {
