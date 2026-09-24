@@ -235,6 +235,10 @@ func (g *GmailHistoryPoller) pollOnce(ctx context.Context, cursor uint64, logger
 			}
 			return cursor, err
 		}
+		// History records hold only IDs and labels, never content, so they are
+		// safe to log whole; they are the evidence for what Gmail reported.
+		logger.Debug().Str("label", lblID).Uint64("history_id", labelCursor).Interface("records", labelRecords).
+			Msg("Gmail history.list response")
 		records = append(records, labelRecords...)
 		if newCursor == 0 || labelCursor < newCursor {
 			newCursor = labelCursor
@@ -305,13 +309,7 @@ func listHistory(ctx context.Context, svc *gmail.Service, cursor uint64, labelID
 //     currently has a monitored label, so it also reports unrelated labels
 //     added to a message already bridged.
 func newMessageIDs(records []*gmail.History, monitored []string) []string {
-	sorted := make([]*gmail.History, 0, len(records))
-	for _, h := range records {
-		if h != nil {
-			sorted = append(sorted, h)
-		}
-	}
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Id < sorted[j].Id })
+	sort.SliceStable(records, func(i, j int) bool { return records[i].Id < records[j].Id })
 
 	var ids []string
 	seen := map[string]bool{}
@@ -322,7 +320,7 @@ func newMessageIDs(records []*gmail.History, monitored []string) []string {
 		seen[m.Id] = true
 		ids = append(ids, m.Id)
 	}
-	for _, h := range sorted {
+	for _, h := range records {
 		for _, ma := range h.MessagesAdded {
 			if ma != nil {
 				add(ma.Message)
