@@ -36,6 +36,11 @@ type EmailConnector struct {
 	// instead. Populated in Init.
 	GmailInbound *GmailInboundManager
 
+	// BeeperSync stores the archived and read state each Gmail thread and its
+	// Beeper chat last agreed on. Populated in Init; used only when
+	// network.beeper_sync is configured.
+	BeeperSync *BeeperSyncQuery
+
 	// SentDedup records the messages we ourselves sent, keyed by Message-ID,
 	// so the inbound IMAP processor can suppress the IDLE echo from the Sent
 	// folder. Populated in Init; the sender (Phase C) will call Record from
@@ -236,6 +241,12 @@ func (ec *EmailConnector) Init(bridge *bridgev2.Bridge) {
 		panic(fmt.Errorf("sent dedup table init failed: %w", err))
 	}
 	ec.Processor.SetDedupChecker(&dedupAdapter{store: ec.SentDedup})
+
+	ec.BeeperSync = &BeeperSyncQuery{DB: bridge.DB}
+	if err := ec.BeeperSync.CreateTable(ctx); err != nil {
+		bridge.Log.Error().Err(err).Msg("Failed to create matrimail_beeper_sync table")
+		panic(fmt.Errorf("beeper sync table init failed: %w", err))
+	}
 
 	// Alias resolver: when an inbound email lands, pickDeliveredTo needs the
 	// list of addresses that count as "this user" (primary + send-as
@@ -446,7 +457,7 @@ func (ec *EmailConnector) createCommands() []commands.CommandHandler {
 
 func (ec *EmailConnector) Start(ctx context.Context) error {
 	ec.Bridge.Log.Info().Msg("Email connector starting...")
-	return nil
+	return ec.Config.BeeperSync.validate()
 }
 
 // Stop gracefully shuts down the EmailConnector and all IMAP connections

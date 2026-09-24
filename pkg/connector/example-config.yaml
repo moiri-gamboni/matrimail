@@ -79,6 +79,24 @@ gmail_oauth:
     # callback before timing out. Default 600 (10 minutes).
     callback_timeout_seconds: 600
 
+# Optional: mirror archive and read state between Gmail and Beeper. Archiving,
+# unarchiving, reading or marking unread a thread's chat in Beeper does the
+# same to the Gmail thread, and the reverse. Works for Gmail accounts logged in
+# with OAuth in the default "modify" mode.
+#
+# Beeper does not tell a bridge when a chat is archived or read, so the bridge
+# reads that from the Beeper Desktop API, served by Beeper Server (headless) or
+# Beeper Desktop running on the same host. Leave api_url empty to turn this off.
+beeper_sync:
+    # Base URL of the Beeper Desktop API, e.g. http://127.0.0.1:23373
+    api_url: ""
+    # File holding the API's access token. Read on every call, so replacing
+    # the token needs no restart. Required when api_url is set; a file the
+    # bridge cannot read stops it at startup.
+    token_file: ""
+    # How often to check Beeper for changes, in seconds. Default 60.
+    interval_seconds: 60
+
 # Optional: external draft-generation webhook (e.g. n8n). When `url` is set,
 # users can run `!matrimail draft` inside any portal room to fire an HTTP POST
 # to this URL with the thread's Gmail context (account email, thread ID, latest

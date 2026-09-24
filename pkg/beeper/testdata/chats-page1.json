@@ -1,0 +1,128 @@
+{
+ "items": [
+  {
+   "id": "!roomA:beeper.local",
+   "localChatID": "7",
+   "accountID": "sh-email_email:me@example.com",
+   "network": "bridgev2",
+   "title": "Quarterly report",
+   "description": "Email thread: thread-root@example.com",
+   "imgURL": null,
+   "type": "group",
+   "isReadOnly": true,
+   "participants": {
+    "items": [
+     {
+      "id": "@sh-email_email=3aalice=40example.com:beeper.local",
+      "fullName": "alice@example.com",
+      "cannotMessage": false,
+      "isSelf": false,
+      "isAdmin": false,
+      "isPending": false,
+      "isNetworkBot": false
+     },
+     {
+      "id": "@sh-email_email=3ame=40example.com:beeper.local",
+      "fullName": "me@example.com",
+      "cannotMessage": false,
+      "isSelf": false,
+      "isAdmin": false,
+      "isPending": false,
+      "isNetworkBot": false
+     },
+     {
+      "id": "@me:beeper.example",
+      "cannotMessage": false,
+      "isSelf": true,
+      "isAdmin": false,
+      "isPending": false,
+      "isNetworkBot": false
+     }
+    ],
+    "hasMore": false,
+    "total": 3
+   },
+   "lastActivity": "2026-09-24T12:35:40.375Z",
+   "unreadCount": 2,
+   "unreadMentionsCount": 0,
+   "lastReadMessageSortKey": "100",
+   "draft": null,
+   "reminder": null,
+   "snooze": null,
+   "isArchived": false,
+   "isMarkedUnread": false,
+   "isMuted": false,
+   "isPinned": false,
+   "isLowPriority": false,
+   "messageExpirySeconds": null,
+   "capabilities": {
+    "formatting": {
+     "blockquote": 2,
+     "bold": 2,
+     "code_block": 2,
+     "custom_emoji": -1,
+     "headers": 2,
+     "horizontal_line": 2,
+     "inline_code": 2,
+     "inline_link": 2,
+     "italic": 2,
+     "ordered_list": 2,
+     "spoiler": -1,
+     "strikethrough": 2,
+     "table": 1,
+     "underline": 2,
+     "unordered_list": 2
+    },
+    "attachments": {
+     "m.audio": {
+      "mimeTypes": {
+       "audio/*": 2
+      },
+      "maxSize": 26214400
+     },
+     "m.file": {
+      "mimeTypes": {
+       "*/*": 2
+      },
+      "caption": 2,
+      "maxSize": 26214400
+     },
+     "m.image": {
+      "mimeTypes": {
+       "image/*": 2
+      },
+      "caption": 2,
+      "maxSize": 26214400
+     },
+     "m.video": {
+      "mimeTypes": {
+       "video/*": 2
+      },
+      "maxSize": 26214400
+     }
+    },
+    "locationMessage": -2,
+    "poll": -2,
+    "reply": 2,
+    "edit": -2,
+    "delete": -2,
+    "reaction": -2
+   },
+   "preview": {
+    "id": "10",
+    "chatID": "!roomA:beeper.local",
+    "accountID": "sh-email_email:me@example.com",
+    "senderID": "@sh-emailbot:beeper.local",
+    "senderName": "@sh-emailbot:beeper.local",
+    "timestamp": "2026-09-24T12:35:40.375Z",
+    "sortKey": "101",
+    "text": "Hello",
+    "isSender": false,
+    "isUnread": false
+   }
+  }
+ ],
+ "hasMore": true,
+ "oldestCursor": "1790000000000:7",
+ "newestCursor": "1790000000000:7"
+}
