@@ -96,3 +96,9 @@ draft_webhook:
     secret: ""
     # Optional timeout for the POST in seconds. Default 10.
     timeout_seconds: 10
+
+# Timezone that dates written into outgoing mail are shown in, such as the
+# "On <date>, <sender> wrote:" line above a quoted reply. An IANA zone name
+# like "Europe/Lisbon"; empty uses the bridge process's local zone. A name
+# that doesn't resolve stops the bridge at startup.
+timezone: ""

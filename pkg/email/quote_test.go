@@ -219,7 +219,7 @@ func TestStripQuotedReplyHTML_EmptyAndWhitespace(t *testing.T) {
 
 func TestFormatGmailQuoteText_Basic(t *testing.T) {
 	d := time.Date(2026, 5, 19, 10, 30, 0, 0, time.UTC)
-	got := FormatGmailQuoteText(d, "John Doe <john@example.com>", "Hey,\n\nWhat's the plan?\nThanks,\nJohn")
+	got := FormatGmailQuoteText(d, time.UTC, "John Doe <john@example.com>", "Hey,\n\nWhat's the plan?\nThanks,\nJohn")
 	want := `On Tue, May 19, 2026 at 10:30 AM, John Doe <john@example.com> wrote:
 > Hey,
 >
@@ -234,14 +234,14 @@ func TestFormatGmailQuoteText_Basic(t *testing.T) {
 func TestFormatGmailQuoteText_PreservesExistingQuoteDepth(t *testing.T) {
 	d := time.Date(2026, 5, 19, 10, 30, 0, 0, time.UTC)
 	parent := "My reply.\n\n> Previously quoted line"
-	got := FormatGmailQuoteText(d, "jane@example.com", parent)
+	got := FormatGmailQuoteText(d, time.UTC, "jane@example.com", parent)
 	if !strings.Contains(got, ">> Previously quoted line") {
 		t.Errorf("nested quote depth not preserved: %q", got)
 	}
 }
 
 func TestFormatGmailQuoteHTML_EmptyReturnsEmpty(t *testing.T) {
-	got := FormatGmailQuoteHTML(time.Now(), "x@y.z", "")
+	got := FormatGmailQuoteHTML(time.Now(), time.UTC, "x@y.z", "")
 	if got != "" {
 		t.Errorf("expected empty, got %q", got)
 	}
@@ -249,7 +249,7 @@ func TestFormatGmailQuoteHTML_EmptyReturnsEmpty(t *testing.T) {
 
 func TestFormatGmailQuoteHTML_WrapsParent(t *testing.T) {
 	d := time.Date(2026, 5, 19, 10, 30, 0, 0, time.UTC)
-	got := FormatGmailQuoteHTML(d, "John <john@example.com>", "<p>Hello</p>")
+	got := FormatGmailQuoteHTML(d, time.UTC, "John <john@example.com>", "<p>Hello</p>")
 	if !strings.Contains(got, `class="gmail_quote gmail_quote_container"`) {
 		t.Errorf("missing gmail_quote container: %q", got)
 	}
@@ -282,5 +282,22 @@ func TestNormalizeReplySubject(t *testing.T) {
 		if got := NormalizeReplySubject(c.in); got != c.want {
 			t.Errorf("NormalizeReplySubject(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// The parent's Date header usually arrives in UTC; the attribution line must
+// read in the user's zone, as their own clock showed it.
+func TestFormatGmailQuote_AttributionInGivenZone(t *testing.T) {
+	lisbon, err := time.LoadLocation("Europe/Lisbon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := time.Date(2026, 9, 24, 12, 34, 0, 0, time.UTC)
+	want := "On Thu, Sep 24, 2026 at 1:34 PM, Alex Example"
+	if got := FormatGmailQuoteText(d, lisbon, "Alex Example <alex@example.com>", "hi"); !strings.HasPrefix(got, want) {
+		t.Errorf("text attribution = %q, want prefix %q", got, want)
+	}
+	if got := FormatGmailQuoteHTML(d, lisbon, "Alex Example <alex@example.com>", "<p>hi</p>"); !strings.Contains(got, want) {
+		t.Errorf("html attribution = %q, want %q in it", got, want)
 	}
 }

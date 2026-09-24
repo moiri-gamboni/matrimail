@@ -2,6 +2,7 @@ package connector
 
 import (
 	_ "embed"
+	"fmt"
 	"time"
 
 	up "go.mau.fi/util/configupgrade"
@@ -24,8 +25,30 @@ type Config struct {
 	// generate a Gmail draft for a given thread. When URL is empty the
 	// command short-circuits with an "unconfigured" error.
 	DraftWebhook DraftWebhookConfig `yaml:"draft_webhook"`
+	// Timezone is the IANA zone name (e.g. "Europe/Lisbon") that dates
+	// written into outgoing mail are shown in, such as the "On <date>, <sender>
+	// wrote:" line above a quoted reply. Empty means the process's local zone.
+	Timezone string `yaml:"timezone"`
+	// location is Timezone resolved by ValidateConfig.
+	location *time.Location
+
 	// Keep Network for internal use but don't map to YAML
 	Network NetworkConfig `yaml:"-"`
+}
+
+// ValidateConfig resolves network.timezone once, before the bridge starts, so
+// a misspelt zone name stops startup instead of failing every reply.
+func (ec *EmailConnector) ValidateConfig() error {
+	if ec.Config.Timezone == "" {
+		ec.Config.location = time.Local
+		return nil
+	}
+	loc, err := time.LoadLocation(ec.Config.Timezone)
+	if err != nil {
+		return fmt.Errorf("network.timezone: %w", err)
+	}
+	ec.Config.location = loc
+	return nil
 }
 
 // DraftWebhookConfig is the on-disk shape of the draft_webhook: block.
@@ -170,6 +193,8 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Str, "draft_webhook", "url")
 	helper.Copy(up.Str, "draft_webhook", "secret")
 	helper.Copy(up.Int, "draft_webhook", "timeout_seconds")
+
+	helper.Copy(up.Str, "timezone")
 }
 
 func (ec *EmailConnector) GetConfig() (string, any, up.Upgrader) {

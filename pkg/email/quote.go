@@ -265,15 +265,15 @@ func trimTrailingBR(s string) string {
 //	> <line 2>
 //	> ...
 //
-// The Date is formatted as `Mon, Jan 2, 2006 at 3:04 PM` (Gmail's canonical
-// English form). When parentFrom parses as a "Name <addr>" pair the display
+// The Date is formatted in loc as `Mon, Jan 2, 2006 at 3:04 PM` (Gmail's
+// canonical English form). When parentFrom parses as a "Name <addr>" pair the display
 // name is used; otherwise the raw From is preserved.
 //
 // parentText should be the full text body of the parent message (already
 // containing its own quote chain if any) — Gmail only quotes one level deep
 // at the producer side; the chain accumulates through repeated replies.
-func FormatGmailQuoteText(parentDate time.Time, parentFrom, parentText string) string {
-	attr := buildAttributionLine(parentDate, parentFrom)
+func FormatGmailQuoteText(parentDate time.Time, loc *time.Location, parentFrom, parentText string) string {
+	attr := buildAttributionLine(parentDate, loc, parentFrom)
 	if parentText == "" {
 		return attr + "\n"
 	}
@@ -314,11 +314,11 @@ func FormatGmailQuoteText(parentDate time.Time, parentFrom, parentText string) s
 // If parentHTML is empty, no quote block is produced and the caller should
 // fall back to omitting the HTML alternative entirely (a text-only quote is
 // fine on its own).
-func FormatGmailQuoteHTML(parentDate time.Time, parentFrom, parentHTML string) string {
+func FormatGmailQuoteHTML(parentDate time.Time, loc *time.Location, parentFrom, parentHTML string) string {
 	if parentHTML == "" {
 		return ""
 	}
-	attr := htmlEscape(buildAttributionLine(parentDate, parentFrom))
+	attr := htmlEscape(buildAttributionLine(parentDate, loc, parentFrom))
 	return `<div class="gmail_quote gmail_quote_container"><div dir="ltr" class="gmail_attr">` +
 		attr + `<br></div><blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex">` +
 		parentHTML +
@@ -326,14 +326,16 @@ func FormatGmailQuoteHTML(parentDate time.Time, parentFrom, parentHTML string) s
 }
 
 // buildAttributionLine produces the "On <date>, <sender> wrote:" header used
-// by both text and HTML quote builders.
-func buildAttributionLine(parentDate time.Time, parentFrom string) string {
+// by both text and HTML quote builders. The date is shown in loc, the user's
+// zone: the parent's Date header carries the sender's zone (often UTC), which
+// would show a time the user's clock never read.
+func buildAttributionLine(parentDate time.Time, loc *time.Location, parentFrom string) string {
 	when := parentDate
 	if when.IsZero() {
 		when = time.Now()
 	}
 	// Gmail's English format: "Mon, Jan 2, 2006 at 3:04 PM"
-	dateStr := when.Format("Mon, Jan 2, 2006 at 3:04 PM")
+	dateStr := when.In(loc).Format("Mon, Jan 2, 2006 at 3:04 PM")
 
 	sender := strings.TrimSpace(parentFrom)
 	if addr, err := netmail.ParseAddress(sender); err == nil {

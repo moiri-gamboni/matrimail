@@ -123,7 +123,7 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 	// Pick From: the alias the most recent inbound was addressed to wins
 	// (when it's known and is one of our addresses); otherwise the primary.
 	fromAddr, fromName := pickFromAddressFromSlice(ec, thread, selves)
-	om := buildOutgoingMessage(fromAddr, fromName, thread, msg, inReplyTo, references, to, cc)
+	om := buildOutgoingMessage(fromAddr, fromName, thread, msg, inReplyTo, references, to, cc, ec.Main.Config.location)
 	// Append the user's Gmail-side signature on NEW threads only, matching
 	// the Gmail web UI's "include signature on first message in thread"
 	// behavior. Signature is empty when the account isn't OAuth-Gmail or
@@ -483,7 +483,7 @@ func pickFromAddressFromSlice(ec *EmailClient, thread *email.EmailThread, selves
 // buildOutgoingMessage assembles the OutgoingMessage from the Matrix event
 // content and resolved threading metadata. Re: prefixing matches RFC 5322
 // convention (case-insensitive check so we don't double-prefix).
-func buildOutgoingMessage(fromAddr, fromName string, thread *email.EmailThread, msg *bridgev2.MatrixMessage, inReplyTo string, references []string, to, cc []netmail.Address) *email.OutgoingMessage {
+func buildOutgoingMessage(fromAddr, fromName string, thread *email.EmailThread, msg *bridgev2.MatrixMessage, inReplyTo string, references []string, to, cc []netmail.Address, loc *time.Location) *email.OutgoingMessage {
 	domain := ""
 	if at := strings.LastIndex(fromAddr, "@"); at >= 0 {
 		domain = fromAddr[at+1:]
@@ -513,7 +513,7 @@ func buildOutgoingMessage(fromAddr, fromName string, thread *email.EmailThread, 
 	// (text), and a <div class="gmail_quote"> block (HTML). The parent body is
 	// captured on the inbound path in EmailThread.LastTextBody / LastHTMLBody.
 	if isReply && (thread.LastTextBody != "" || thread.LastHTMLBody != "") {
-		quoteText := email.FormatGmailQuoteText(thread.LastDate, thread.LastFrom, thread.LastTextBody)
+		quoteText := email.FormatGmailQuoteText(thread.LastDate, loc, thread.LastFrom, thread.LastTextBody)
 		if quoteText != "" {
 			if textBody != "" {
 				textBody = textBody + "\n\n" + quoteText
@@ -522,7 +522,7 @@ func buildOutgoingMessage(fromAddr, fromName string, thread *email.EmailThread, 
 			}
 		}
 		if thread.LastHTMLBody != "" {
-			quoteHTML := email.FormatGmailQuoteHTML(thread.LastDate, thread.LastFrom, thread.LastHTMLBody)
+			quoteHTML := email.FormatGmailQuoteHTML(thread.LastDate, loc, thread.LastFrom, thread.LastHTMLBody)
 			if quoteHTML != "" {
 				if htmlBody != "" {
 					htmlBody = `<div dir="ltr">` + htmlBody + `</div><br>` + quoteHTML
