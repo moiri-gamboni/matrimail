@@ -1325,7 +1325,13 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 	// Add HTML formatting if available
 	if origHTML != "" && origHTML != e.emailMessage.TextContent {
 		content.Format = event.FormatHTML
-		content.FormattedBody = matrixFormattedBody(origHTML)
+		roomHTML, tidyErr := tidyEmailHTML(origHTML)
+		if tidyErr != nil {
+			// Untidied HTML still renders; only the readability pass is lost.
+			e.processor.log.Debug().Err(tidyErr).Msg("Email HTML could not be tidied; sending it as written")
+			roomHTML = origHTML
+		}
+		content.FormattedBody = matrixFormattedBody(roomHTML)
 	}
 
 	// Ensure body isn't empty - if we have HTML but no text, try to extract from HTML
@@ -2065,6 +2071,11 @@ func lightMinifyHTML(s string) string {
 // simpleHTMLToText converts basic HTML into readable plaintext.
 // It strips script/style, removes tags, collapses whitespace, and decodes common entities.
 func simpleHTMLToText(s string) string {
+	// Untidied HTML still converts, only with its hidden preview line and
+	// padding left in.
+	if tidied, err := tidyEmailHTML(s); err == nil {
+		s = tidied
+	}
 	// Remove script and style blocks
 	s = stripTagContent(s, "script")
 	s = stripTagContent(s, "style")
