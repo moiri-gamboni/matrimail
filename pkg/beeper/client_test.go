@@ -136,9 +136,9 @@ func TestWrites(t *testing.T) {
 	t.Parallel()
 	chat := `{"id":"!roomA:beeper.local","isArchived":false,"unreadCount":0,"isMarkedUnread":false}`
 	f := &fakeServer{t: t, token: "tok", routes: map[string]string{
-		"PATCH /v1/chats/!roomA:beeper.local":       chat,
-		"POST /v1/chats/!roomA:beeper.local/read":   chat,
-		"POST /v1/chats/!roomA:beeper.local/unread": chat,
+		"POST /v1/chats/!roomA:beeper.local/archive": chat,
+		"POST /v1/chats/!roomA:beeper.local/read":    chat,
+		"POST /v1/chats/!roomA:beeper.local/unread":  chat,
 	}}
 	c := newTestClient(t, f)
 	ctx := context.Background()
@@ -154,8 +154,8 @@ func TestWrites(t *testing.T) {
 		}
 	}
 	want := []string{
-		`PATCH /v1/chats/!roomA:beeper.local {"isArchived":true}`,
-		`PATCH /v1/chats/!roomA:beeper.local {"isArchived":false}`,
+		`POST /v1/chats/!roomA:beeper.local/archive {"archived":true}`,
+		`POST /v1/chats/!roomA:beeper.local/archive {"archived":false}`,
 		`POST /v1/chats/!roomA:beeper.local/read {}`,
 		`POST /v1/chats/!roomA:beeper.local/unread {}`,
 	}
