@@ -1,0 +1,61 @@
+[
+ {
+  "accountID": "matrix",
+  "loginID": "@me:beeper.example",
+  "bridge": {
+   "id": "matrix",
+   "type": "matrix",
+   "provider": "cloud"
+  },
+  "network": "Beeper",
+  "user": {
+   "id": "redacted",
+   "isSelf": true
+  },
+  "status": "connected"
+ },
+ {
+  "accountID": "sh-discord_100000000000000001",
+  "loginID": "100000000000000001",
+  "bridge": {
+   "id": "sh-discord",
+   "type": "discordgo",
+   "provider": "self-hosted"
+  },
+  "network": "Discord",
+  "user": {
+   "id": "redacted",
+   "isSelf": true
+  },
+  "status": "connected"
+ },
+ {
+  "accountID": "sh-email_email:me@example.com",
+  "loginID": "email:me@example.com",
+  "bridge": {
+   "id": "sh-email",
+   "type": "bridgev2",
+   "provider": "self-hosted"
+  },
+  "user": {
+   "id": "redacted",
+   "isSelf": true
+  },
+  "status": "connected"
+ },
+ {
+  "accountID": "sh-slack_T000-U000",
+  "loginID": "T000-U000",
+  "bridge": {
+   "id": "sh-slack",
+   "type": "slackgo",
+   "provider": "self-hosted"
+  },
+  "network": "Slack",
+  "user": {
+   "id": "redacted",
+   "isSelf": true
+  },
+  "status": "connected"
+ }
+]
