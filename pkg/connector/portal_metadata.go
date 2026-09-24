@@ -172,18 +172,31 @@ func PersistThreadState(ctx context.Context, portal *bridgev2.Portal, thread *em
 //     the stored value wins. References compares length rather than emptiness
 //     because the inbound path rebuilds the chain from one message's headers
 //     and can hand back a shorter-but-non-empty one.
-//   - The Last* recipient fields (LastFrom, LastTo, LastCc,
-//     LastInboundMessageID) are replaced wholesale, empties included. Clearing
-//     them on absence is the recipient-stickiness fix itself: an inbound with
-//     no Cc: must erase the previous Cc, or a reply reaches someone the sender
-//     deliberately dropped. Merging them would reintroduce that bug through the
-//     storage layer.
+//   - The inbound reply context (LastFrom, LastTo, LastCc,
+//     LastInboundMessageID, LastDate and the quoted bodies) is replaced
+//     wholesale, empties included, whenever the snapshot describes an inbound.
+//     Clearing them on absence is the recipient-stickiness fix itself: an
+//     inbound with no Cc: must erase the previous Cc, or a reply reaches
+//     someone the sender deliberately dropped. Merging them field by field
+//     would reintroduce that bug through the storage layer.
+//   - A snapshot describing no inbound at all keeps the stored context as a
+//     unit. That is a skeleton thread holding only the user's own message,
+//     which leaves the context alone by design; its empties mean "unknown".
 func mergePortalMetadata(prev, next *PortalMetadata) *PortalMetadata {
 	if next == nil {
 		return prev
 	}
 	if prev == nil {
 		return next
+	}
+	if !next.hasInboundContext() {
+		next.LastFrom = prev.LastFrom
+		next.LastTo = append([]string(nil), prev.LastTo...)
+		next.LastCc = append([]string(nil), prev.LastCc...)
+		next.LastInboundMessageID = prev.LastInboundMessageID
+		next.LastDate = prev.LastDate
+		next.LastTextBody = prev.LastTextBody
+		next.LastHTMLBody = prev.LastHTMLBody
 	}
 	if len(next.References) < len(prev.References) {
 		next.References = append([]string(nil), prev.References...)
@@ -207,6 +220,34 @@ func mergePortalMetadata(prev, next *PortalMetadata) *PortalMetadata {
 		next.Participants = append([]string(nil), prev.Participants...)
 	}
 	return next
+}
+
+// hasInboundContext reports whether the snapshot carries the reply context of
+// some inbound. LastFrom is checked as well as the ID because rows written
+// before LastInboundMessageID existed carry only the former.
+func (pm *PortalMetadata) hasInboundContext() bool {
+	return pm.LastInboundMessageID != "" || pm.LastFrom != ""
+}
+
+// fillInboundContext completes a cached thread that holds no inbound reply
+// context from the stored row. That thread is a skeleton the user's own
+// message was threaded onto after the cache lost it; without this, a reply
+// typed in Matrix would be addressed from the user's own message's recipients
+// until the next inbound arrives.
+func fillInboundContext(thread *email.EmailThread, pm *PortalMetadata) {
+	if thread.LastInboundMessageID != "" || thread.LastFrom != "" || !pm.hasInboundContext() {
+		return
+	}
+	thread.LastFrom = pm.LastFrom
+	thread.LastTo = append([]string(nil), pm.LastTo...)
+	thread.LastCc = append([]string(nil), pm.LastCc...)
+	thread.LastInboundMessageID = pm.LastInboundMessageID
+	thread.LastDate = pm.LastDate
+	thread.LastTextBody = pm.LastTextBody
+	thread.LastHTMLBody = pm.LastHTMLBody
+	if thread.LastDeliveredTo == "" {
+		thread.LastDeliveredTo = pm.LastDeliveredTo
+	}
 }
 
 // ThreadFromPortalMetadata is the inverse of PortalMetadataFromThread.

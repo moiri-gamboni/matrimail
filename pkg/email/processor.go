@@ -233,10 +233,18 @@ func (p *Processor) ProcessParsedEmail(ctx context.Context, parsedEmail *ParsedE
 			Msg("Successfully parsed email message")
 	}
 
+	receiver := string(userLogin.ID)
+	var ownAddresses []string
+	if p.aliasResolver != nil {
+		ownAddresses = p.aliasResolver(receiver)
+	}
+	isOutbound := p.isOutboundMessage(mailbox) || isOwnAddress(parsedEmail.From, ownAddresses)
+	parsedEmail.Outbound = isOutbound
+
 	// Step 0: Sent-folder dedup. If we just received an echo of a message we
 	// ourselves sent (recorded by HandleMatrixMessage in the connector),
 	// short-circuit before threading + portal work.
-	if p.dedupChecker != nil && p.isOutboundMessage(mailbox) {
+	if p.dedupChecker != nil && isOutbound {
 		if hit, derr := p.dedupChecker.IsOurMessage(ctx, string(userLogin.ID), parsedEmail.MessageID); derr != nil {
 			p.log.Warn().Err(derr).Msg("Dedup check failed; falling through and processing message normally")
 		} else if hit {
@@ -257,11 +265,8 @@ func (p *Processor) ProcessParsedEmail(ctx context.Context, parsedEmail *ParsedE
 
 	// Resolve DeliveredTo (which alias this inbound was addressed to) before
 	// threading so the resulting thread sticks the alias for outbound use.
-	receiver := string(userLogin.ID)
-	if p.aliasResolver != nil {
-		if aliases := p.aliasResolver(receiver); len(aliases) > 0 {
-			parsedEmail.DeliveredTo = pickDeliveredTo(parsedEmail.To, parsedEmail.Cc, aliases)
-		}
+	if !isOutbound {
+		parsedEmail.DeliveredTo = pickDeliveredTo(parsedEmail.To, parsedEmail.Cc, ownAddresses)
 	}
 
 	// Step 1: Determine thread membership (scoped by receiver)
@@ -279,9 +284,6 @@ func (p *Processor) ProcessParsedEmail(ctx context.Context, parsedEmail *ParsedE
 
 	// Step 3: Create network message ID
 	networkMessageID := common.EmailToMessageID(parsedEmail.MessageID)
-
-	// Step 4: Check if this is an outbound message
-	isOutbound := p.isOutboundMessage(mailbox)
 
 	if p.sanitized {
 		p.log.Debug().
@@ -983,9 +985,26 @@ func formatIMAPAddressSlice(addrs []imap.Address) []string {
 	return result
 }
 
-// isOutboundMessage determines if this email was sent by the bridge user.
-// Currently, we only process the INBOX, so all processed emails are treated as inbound.
-// When Sent-folder processing is added, this can be revisited with mailbox context.
+// isOwnAddress reports whether from is one of the account's own addresses
+// (primary or send-as alias).
+func isOwnAddress(from string, ownAddresses []string) bool {
+	addr := extractEmailAddress(from)
+	if addr == "" {
+		return false
+	}
+	for _, own := range ownAddresses {
+		if strings.EqualFold(addr, strings.TrimSpace(own)) {
+			return true
+		}
+	}
+	return false
+}
+
+// isOutboundMessage reports whether the mailbox or Gmail label a message was
+// found in holds the user's sent mail. It is one of two signals: a message
+// From one of the account's own addresses is outbound wherever it was found
+// (see isOwnAddress), which also covers a Sent folder whose name this does
+// not recognise.
 func (p *Processor) isOutboundMessage(mailbox string) bool {
 	mb := strings.ToLower(strings.TrimSpace(mailbox))
 	// Treat messages from any “Sent” mailbox variant as outbound.

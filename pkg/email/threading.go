@@ -72,10 +72,10 @@ type EmailThread struct {
 	// fields actually describe; replying to any older message would otherwise
 	// be addressed from the wrong recipient set.
 	LastInboundMessageID string
-	// LastOutboundMessageID is the Message-ID of the most recent message we
-	// sent in this thread. Distinct from MessageID, which is the thread's
-	// first message until a send overwrites it -- so it cannot be used to mean
-	// "our own last send".
+	// LastOutboundMessageID is the Message-ID of the most recent message the
+	// user sent in this thread, through this bridge or any other client.
+	// Distinct from MessageID, which is the newest message in either
+	// direction -- so it cannot be used to mean "our own last send".
 	LastOutboundMessageID string
 
 	// LastDate is the Date header of the most recent inbound. Drives the
@@ -258,6 +258,11 @@ type ParsedEmail struct {
 	// to (matched against the user's send-as aliases). Empty if no match.
 	// Used so replies preserve the alias as the From header.
 	DeliveredTo string
+	// Outbound marks a message the account owner sent, from this bridge or
+	// any other client. It is threaded and bridged like any other, but leaves
+	// the thread's inbound reply context alone: a reply answers the other
+	// party, never the user.
+	Outbound bool
 }
 
 // isForwardedMessage checks if an email is a forward based on subject and content
@@ -457,17 +462,6 @@ func (tm *ThreadManager) addToExistingThread(thread *EmailThread, email *ParsedE
 	if email.GmailThreadID != "" {
 		thread.GmailThreadID = email.GmailThreadID
 	}
-	// Sticky reply-context fields: most recent inbound dictates From/To/Cc
-	// for the next outbound reply.
-	if email.DeliveredTo != "" {
-		thread.LastDeliveredTo = email.DeliveredTo
-	}
-	if email.From != "" {
-		thread.LastFrom = email.From
-	}
-	thread.LastTo = append([]string(nil), email.To...)
-	thread.LastCc = append([]string(nil), email.Cc...)
-	thread.LastInboundMessageID = email.MessageID
 	// MessageID means "the newest message in this thread" -- see its doc
 	// comment. It was previously written only when the thread was created and
 	// when we sent, so in a thread nobody had replied in it still held the
@@ -477,13 +471,39 @@ func (tm *ThreadManager) addToExistingThread(thread *EmailThread, email *ParsedE
 	if email.MessageID != "" {
 		thread.MessageID = email.MessageID
 	}
+	recordReplyContext(thread, email)
+
+	return thread
+}
+
+// recordReplyContext updates the fields a reply is addressed and quoted from.
+//
+// An inbound replaces them all, empties included: an absent Cc header must
+// clear the previous message's Cc, or a reply reaches someone the sender
+// deliberately dropped. An outbound -- the user's own message, sent from this
+// bridge or any other client -- touches none of them, because the reply still
+// has to answer the last inbound; it is only recorded as our latest send.
+func recordReplyContext(thread *EmailThread, email *ParsedEmail) {
+	if email.Outbound {
+		if email.MessageID != "" {
+			thread.LastOutboundMessageID = email.MessageID
+		}
+		return
+	}
+	if email.DeliveredTo != "" {
+		thread.LastDeliveredTo = email.DeliveredTo
+	}
+	if email.From != "" {
+		thread.LastFrom = email.From
+	}
+	thread.LastTo = append([]string(nil), email.To...)
+	thread.LastCc = append([]string(nil), email.Cc...)
+	thread.LastInboundMessageID = email.MessageID
 	if !email.Date.IsZero() {
 		thread.LastDate = email.Date
 	}
 	thread.LastTextBody = capBody(email.TextContent)
 	thread.LastHTMLBody = capBody(email.HTMLContent)
-
-	return thread
 }
 
 // capBody truncates a body string to MaxQuoteBodyBytes for retention in the
@@ -529,23 +549,16 @@ func (tm *ThreadManager) createNewThread(email *ParsedEmail) *EmailThread {
 
 	// Create new thread
 	thread := &EmailThread{
-		ThreadID:             threadID,
-		Subject:              email.Subject,
-		Participants:         participants,
-		MessageID:            email.MessageID,
-		InReplyTo:            email.InReplyTo,
-		References:           email.References,
-		GmailThreadID:        email.GmailThreadID,
-		LastDeliveredTo:      email.DeliveredTo,
-		LastFrom:             email.From,
-		LastTo:               append([]string(nil), email.To...),
-		LastCc:               append([]string(nil), email.Cc...),
-		LastInboundMessageID: email.MessageID,
-		LastDate:             email.Date,
-		LastTextBody:         capBody(email.TextContent),
-		LastHTMLBody:         capBody(email.HTMLContent),
-		LastAccessed:         time.Now(),
+		ThreadID:      threadID,
+		Subject:       email.Subject,
+		Participants:  participants,
+		MessageID:     email.MessageID,
+		InReplyTo:     email.InReplyTo,
+		References:    email.References,
+		GmailThreadID: email.GmailThreadID,
+		LastAccessed:  time.Now(),
 	}
+	recordReplyContext(thread, email)
 
 	// Add to known threads (no receiver here; caller will cache after DetermineThread using receiver)
 	// For now, store under empty receiver to keep legacy behavior.

@@ -291,19 +291,24 @@ func (ec *EmailClient) resolveThreadForPortal(portalID networkid.PortalID) (*ema
 }
 
 // resolveThreadForPortalWithMetadata is resolveThreadForPortal extended to
-// rehydrate the thread from Portal.Metadata when the ThreadManager misses.
+// rehydrate the thread from Portal.Metadata when the ThreadManager misses, and
+// to complete a cached thread that lacks inbound reply context from it.
 // Reseeds the cache so subsequent operations on the same room avoid the
 // round trip.
 func (ec *EmailClient) resolveThreadForPortalWithMetadata(portal *bridgev2.Portal) (*email.EmailThread, error) {
 	if portal == nil {
 		return nil, errors.New("matrimail: nil portal")
 	}
-	if thread, err := ec.resolveThreadForPortal(portal.ID); err == nil {
-		return thread, nil
-	}
 	threadID := strings.TrimPrefix(string(portal.ID), "thread:")
 	pm, ok := portal.Metadata.(*PortalMetadata)
-	if !ok || pm == nil || pm.ThreadID == "" || pm.ThreadID != threadID {
+	hasMetadata := ok && pm != nil && pm.ThreadID != "" && pm.ThreadID == threadID
+	if thread, err := ec.resolveThreadForPortal(portal.ID); err == nil {
+		if hasMetadata {
+			fillInboundContext(thread, pm)
+		}
+		return thread, nil
+	}
+	if !hasMetadata {
 		return nil, fmt.Errorf("matrimail: thread %s not found in cache and no portal metadata to restore from", threadID)
 	}
 	thread := ThreadFromPortalMetadata(pm)
