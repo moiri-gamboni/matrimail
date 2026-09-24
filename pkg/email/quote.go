@@ -171,12 +171,15 @@ var outlookDividerRE = regexp.MustCompile(`^_{12,}$`)
 // htmlQuoteMarkers lists case-insensitive substrings (already lower-cased) that
 // open the quoted-history block in the HTML half of a reply. The first such
 // marker found in the body is the cut point — everything from there to EOF is
-// dropped. Markers cover Gmail, Apple Mail, and Outlook's web and desktop
-// quote layouts.
+// dropped. Markers cover Gmail, Apple Mail, Proton Mail, and Outlook's web
+// and desktop quote layouts. Each is a client's own quote marker, so a
+// blockquote the sender wrote into their message is never mistaken for one.
 var htmlQuoteMarkers = []string{
 	`<div class="gmail_quote`,                            // Gmail (with optional gmail_quote_container suffix)
 	`<blockquote class="gmail_quote`,                     // Gmail standalone blockquote variant
 	`<blockquote type="cite"`,                            // Apple Mail
+	`<div class="protonmail_quote`,                       // Proton Mail (wraps the attribution line and the blockquote)
+	`<blockquote class="protonmail_quote`,                // Proton Mail blockquote without the wrapper
 	`<div id="appendonsend"`,                             // Outlook web (above the quote)
 	`<div id="mail-editor-reference-message-container"`, // New Outlook
 	`<hr id="stopspelling"`,                              // Outlook quirk divider
@@ -190,8 +193,8 @@ var htmlQuoteMarkers = []string{
 // rooms don't render the whole thread chain twice (once per inbound message).
 //
 // We cut at the first occurrence of a known quote-container marker. Trailing
-// `<br>` runs immediately preceding the cut are trimmed so the visible reply
-// doesn't end on a hanging blank line. We do NOT attempt to balance unclosed
+// `<br>` runs and empty `<div>` spacers immediately preceding the cut are
+// trimmed so the visible reply doesn't end on a hanging blank line. We do NOT attempt to balance unclosed
 // tags — Matrix clients run the HTML through a sanitizer that handles
 // truncated fragments gracefully, and the alternative (full DOM parse + walk)
 // is significantly more code for marginal gain.
@@ -213,11 +216,12 @@ func StripQuotedReplyHTML(htmlBody string) string {
 	}
 	out := htmlBody[:cut]
 	// Strip trailing whitespace and any run of <br> tags (with attribute /
-	// self-closing variants) so the new reply body doesn't end on Gmail's
-	// "blank line between body and quote" filler.
+	// self-closing variants) or empty divs, so the new reply body doesn't end
+	// on the "blank line between body and quote" filler (a bare <br> from
+	// Gmail, a <div><br></div> from Proton).
 	out = strings.TrimRight(out, " \t\r\n")
 	for {
-		trimmed := trimTrailingBR(out)
+		trimmed := reTrailingEmptyDiv.ReplaceAllString(trimTrailingBR(out), "")
 		if trimmed == out {
 			break
 		}
@@ -225,6 +229,10 @@ func StripQuotedReplyHTML(htmlBody string) string {
 	}
 	return out
 }
+
+// reTrailingEmptyDiv matches a div at the end of the input holding nothing but
+// whitespace and <br>.
+var reTrailingEmptyDiv = regexp.MustCompile(`(?is)<div\b[^>]*>(?:\s|<br\s*/?>)*</div>$`)
 
 // trimTrailingBR removes a single trailing <br>, <br/>, or <br ...> token
 // (case-insensitive) from the end of s if present.

@@ -167,3 +167,26 @@ func MaterializeBackgroundImages(
 	})
 	return out
 }
+
+// reEmptyProtonSignature matches one Proton Mail signature element marked
+// empty (class protonmail_signature_block-empty) whose content is only
+// whitespace and <br>. Proton composes every message with a signature block
+// for the user's and Proton's signatures and keeps the block when both are
+// unset, so without this a room shows a stack of blank wrappers.
+var reEmptyProtonSignature = regexp.MustCompile(
+	`(?is)<div\b[^>]*\bclass="[^"]*\bprotonmail_signature_block-empty\b[^"]*"[^>]*>(?:\s|<br\s*/?>)*</div>`,
+)
+
+// stripEmptyProtonSignature removes Proton Mail's empty signature elements.
+// The container only counts as empty once its empty children are gone, so
+// the match is repeated until nothing changes; a signature with content
+// keeps its container and loses only the empty sibling.
+func stripEmptyProtonSignature(htmlBody string) string {
+	for {
+		next := reEmptyProtonSignature.ReplaceAllString(htmlBody, "")
+		if next == htmlBody {
+			return htmlBody
+		}
+		htmlBody = next
+	}
+}
