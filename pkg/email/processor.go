@@ -2078,45 +2078,101 @@ func simpleHTMLToText(s string) string {
 	s = reTags.ReplaceAllString(s, "")
 	// Decode all HTML entities (including numeric ones like &#847; and &zwnj;)
 	s = html.UnescapeString(s)
-	// Filter out invisible/formatting Unicode characters
-	s = filterInvisibleUnicode(s)
+	s = stripPreviewPadding(s, false)
 	// Collapse whitespace
 	s = strings.TrimSpace(collapseWhitespace(s))
 	return s
 }
 
-// reHTMLEntity matches one named or numeric character reference.
-var reHTMLEntity = regexp.MustCompile(`&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);`)
+// reHTMLEntityAt matches one named or numeric character reference at the
+// start of its input. The bounds cover the longest HTML entity name and the
+// largest code point.
+var reHTMLEntityAt = regexp.MustCompile(`^&(?:#[0-9]{1,8}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{0,31});`)
 
 // matrixFormattedBody prepares an email's HTML for formatted_body. The HTML is
 // already correctly escaped, so entities stay as written: decoding them would
 // turn escaped text such as "&lt;alex@example.com&gt;" into markup the
-// client's sanitizer drops. Invisible characters (the padding marketing mail
-// puts after its preview text) are removed whether written literally or as
-// an entity such as &zwnj; or &#847;.
+// client's sanitizer drops. Preview padding is removed whether its characters
+// are written literally or as references such as &zwnj; or &#847;.
 func matrixFormattedBody(htmlBody string) string {
-	htmlBody = reHTMLEntity.ReplaceAllStringFunc(htmlBody, func(ref string) string {
-		if filterInvisibleUnicode(html.UnescapeString(ref)) == "" {
-			return ""
-		}
-		return ref
-	})
-	return filterInvisibleUnicode(htmlBody)
+	return stripPreviewPadding(htmlBody, true)
 }
 
-// filterInvisibleUnicode removes invisible Unicode characters in a single pass
-func filterInvisibleUnicode(s string) string {
-	var result strings.Builder
-	result.Grow(len(s)) // Pre-allocate capacity
+// isPaddingOnly reports the invisible characters marketing mail pads its
+// preview text with that carry no meaning in running text: the combining
+// grapheme joiner (&#847;), zero-width space, word joiner, zero-width
+// no-break space and soft hyphen.
+func isPaddingOnly(r rune) bool {
+	switch r {
+	case '\u034F', '\u200B', '\u2060', '\uFEFF', '\u00AD':
+		return true
+	}
+	return false
+}
 
-	for _, r := range s {
-		// Skip format characters (Cf) and nonspacing marks (Mn) - covers most invisible chars
-		if !unicode.Is(unicode.Cf, r) && !unicode.Is(unicode.Mn, r) {
-			result.WriteRune(r)
+// isJoiner reports the zero-width non-joiner and joiner. Between two visible
+// characters they shape text (a Persian word, an emoji sequence); anywhere
+// else, typically beside spaces and other padding, they are padding.
+func isJoiner(r rune) bool {
+	return r == '\u200C' || r == '\u200D'
+}
+
+// isVisibleNeighbour reports whether r is a character a joiner can
+// legitimately join: a letter, mark, digit or symbol such as an emoji.
+// Punctuation, spaces and the padding characters themselves are not.
+func isVisibleNeighbour(r rune) bool {
+	if isPaddingOnly(r) || isJoiner(r) {
+		return false
+	}
+	return unicode.In(r, unicode.L, unicode.M, unicode.N, unicode.So, unicode.Sk)
+}
+
+// stripPreviewPadding removes preview padding and keeps every other
+// character, combining marks and bidi marks included. With entities set the
+// input is HTML: a character reference counts as the character it encodes,
+// both for removal and as a joiner's neighbour, and a kept reference is
+// written back as it was.
+func stripPreviewPadding(s string, entities bool) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	prev := rune(-1) // last character of the previous unit, kept or not
+	for i := 0; i < len(s); {
+		raw, decoded := textUnitAt(s, i, entities)
+		i += len(raw)
+		r, size := utf8.DecodeRuneInString(decoded)
+		last, _ := utf8.DecodeLastRuneInString(decoded)
+		drop := size == len(decoded) && (isPaddingOnly(r) ||
+			isJoiner(r) && !(isVisibleNeighbour(prev) && isVisibleNeighbour(firstRuneAt(s, i, entities))))
+		if !drop {
+			b.WriteString(raw)
+		}
+		prev = last
+	}
+	return b.String()
+}
+
+// textUnitAt returns the unit starting at s[i]: a character reference (when
+// entities is set) with its decoded text, or else one character.
+func textUnitAt(s string, i int, entities bool) (raw, decoded string) {
+	if entities && s[i] == '&' {
+		if loc := reHTMLEntityAt.FindStringIndex(s[i:]); loc != nil {
+			raw = s[i : i+loc[1]]
+			return raw, html.UnescapeString(raw)
 		}
 	}
+	_, size := utf8.DecodeRuneInString(s[i:])
+	return s[i : i+size], s[i : i+size]
+}
 
-	return result.String()
+// firstRuneAt returns the first character of the unit starting at s[i], or -1
+// at the end of s.
+func firstRuneAt(s string, i int, entities bool) rune {
+	if i >= len(s) {
+		return -1
+	}
+	_, decoded := textUnitAt(s, i, entities)
+	r, _ := utf8.DecodeRuneInString(decoded)
+	return r
 }
 
 // generateParticipantChangeMessage creates a timeline message for participant changes
