@@ -114,11 +114,18 @@ func (f *fakeBeeper) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(before)
 		return
 	case r.Method == http.MethodPatch && action == "":
-		var req struct{ IsArchived *bool }
+		// Observed on Beeper Server 4.3.123: PATCH answers 200 but a bridged
+		// chat's updateThread has no isArchived branch, so nothing changes.
+		f.writes = append(f.writes, room+" patch (ignored)")
+	case r.Method == http.MethodPost && action == "archive":
+		req := struct {
+			Archived *bool `json:"archived"`
+		}{}
 		_ = json.Unmarshal(body, &req)
-		f.writes = append(f.writes, fmt.Sprintf("%s archived=%v", room, *req.IsArchived))
+		archived := req.Archived == nil || *req.Archived // the API defaults to true
+		f.writes = append(f.writes, fmt.Sprintf("%s archived=%v", room, archived))
 		if !f.ignoreWrites {
-			c.archived = *req.IsArchived
+			c.archived = archived
 		}
 	case r.Method == http.MethodPost && action == "read":
 		f.writes = append(f.writes, room+" read")

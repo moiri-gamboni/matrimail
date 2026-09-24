@@ -103,10 +103,12 @@ func (c *Client) GetChat(ctx context.Context, chatID string) (Chat, error) {
 	return chat, err
 }
 
-// SetArchived archives or unarchives a chat. The response describes the chat
-// as it was before the change, so it is not read; GetChat confirms.
+// SetArchived archives or unarchives a chat through the archive endpoint.
+// PATCH /v1/chats/{id} also accepts isArchived and answers 200, but for a
+// bridged chat Beeper Server's updateThread has no branch for it, so the
+// chat stays as it was. The response is not read; GetChat confirms.
 func (c *Client) SetArchived(ctx context.Context, chatID string, archived bool) error {
-	return c.do(ctx, http.MethodPatch, chatPath(chatID), nil, map[string]bool{"isArchived": archived}, nil)
+	return c.do(ctx, http.MethodPost, chatPath(chatID)+"/archive", nil, map[string]bool{"archived": archived}, nil)
 }
 
 // SetUnread marks a chat unread, or read. As with SetArchived, GetChat
