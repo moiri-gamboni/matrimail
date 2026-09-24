@@ -1529,7 +1529,7 @@ func fnDraft(ce *commands.Event, connector *EmailConnector) {
 	// (`!matrimail compose`) and for portals that have produced at least one
 	// outbound send (`client_send.go` writes it post-send). Pure inbound-only
 	// rooms have nil metadata.
-	if meta, ok := ce.Portal.Metadata.(*PortalMetadata); ok && meta != nil {
+	if meta := storedPortalMetadata(ce.Portal); meta != nil {
 		req.ThreadID = meta.ThreadID
 		req.MessageID = meta.LastMessageID
 		req.Subject = meta.Subject

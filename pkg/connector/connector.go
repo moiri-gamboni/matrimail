@@ -563,7 +563,7 @@ func (ec *EmailConnector) GetChatInfo(ctx context.Context, portal *bridgev2.Port
 		// cache after 24h. Reconstruct from Portal.Metadata so the room is
 		// still functional after a bridge restart or long idle.
 		if thread == nil && portal != nil {
-			if pm, ok := portal.Metadata.(*PortalMetadata); ok && pm != nil && pm.ThreadID == threadID {
+			if pm := storedPortalMetadata(portal); pm != nil && pm.ThreadID == threadID {
 				thread = ThreadFromPortalMetadata(pm)
 				ec.ThreadManager.CacheForReceiver(string(userLogin.ID), thread)
 				ec.Bridge.Log.Debug().

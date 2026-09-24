@@ -300,8 +300,8 @@ func (ec *EmailClient) resolveThreadForPortalWithMetadata(portal *bridgev2.Porta
 		return nil, errors.New("matrimail: nil portal")
 	}
 	threadID := strings.TrimPrefix(string(portal.ID), "thread:")
-	pm, ok := portal.Metadata.(*PortalMetadata)
-	hasMetadata := ok && pm != nil && pm.ThreadID != "" && pm.ThreadID == threadID
+	pm := storedPortalMetadata(portal)
+	hasMetadata := pm != nil && pm.ThreadID != "" && pm.ThreadID == threadID
 	if thread, err := ec.resolveThreadForPortal(portal.ID); err == nil {
 		if hasMetadata {
 			fillInboundContext(thread, pm)

@@ -135,6 +135,17 @@ func PortalMetadataFromThread(thread *email.EmailThread) *PortalMetadata {
 // appears in no log.
 var persistMu sync.Mutex
 
+// storedPortalMetadata reads the portal's stored thread state under persistMu,
+// since PersistThreadState replaces it from the inbound goroutines. The row it
+// returns is never modified after being stored, so it is safe to read after
+// the lock is released.
+func storedPortalMetadata(portal *bridgev2.Portal) *PortalMetadata {
+	persistMu.Lock()
+	defer persistMu.Unlock()
+	pm, _ := portal.Metadata.(*PortalMetadata)
+	return pm
+}
+
 // PersistThreadState writes the thread's reply context onto the portal. Called
 // from the send path and from both inbound paths; best-effort, because losing
 // the snapshot degrades to the in-memory cache rather than breaking delivery.

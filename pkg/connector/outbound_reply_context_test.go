@@ -1,6 +1,8 @@
 package connector
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -140,4 +142,48 @@ func TestResolveThreadForPortal_FillsMissingInboundContextFromMetadata(t *testin
 	if thread.LastOutboundMessageID != "out-1@example.com" || thread.MessageID != "out-1@example.com" {
 		t.Errorf("cached own message lost: last %q, outbound %q", thread.MessageID, thread.LastOutboundMessageID)
 	}
+}
+
+// Sending reads the stored row on every message now, not only on a cache
+// miss, while the inbound pollers replace that row through PersistThreadState.
+// Portal.Metadata is an interface value with no lock of its own; an unguarded
+// read beside a write is a data race. Only observable under -race, which CI
+// runs.
+func TestResolveThreadForPortal_ReadsMetadataUnderThePersistLock(t *testing.T) {
+	br := newTestBridge(t)
+	ctx := context.Background()
+	key := networkid.PortalKey{ID: "thread:race-1", Receiver: "login-race"}
+	if err := br.DB.Portal.Insert(ctx, &database.Portal{BridgeID: testBridgeID, PortalKey: key}); err != nil {
+		t.Fatalf("insert portal: %v", err)
+	}
+	dbPortal, err := br.DB.Portal.GetByKey(ctx, key)
+	if err != nil || dbPortal == nil {
+		t.Fatalf("load portal: %v", err)
+	}
+	portal := &bridgev2.Portal{Portal: dbPortal, Bridge: br}
+
+	tm := email.NewThreadManager(nil)
+	tm.CacheForReceiver("login-race", &email.EmailThread{ThreadID: "race-1"})
+	ec := &EmailClient{
+		Main:      &EmailConnector{ThreadManager: tm},
+		UserLogin: &bridgev2.UserLogin{UserLogin: &database.UserLogin{ID: "login-race"}},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			inbound := &email.EmailThread{ThreadID: "race-1", LastFrom: "alice@example.com", LastInboundMessageID: fmt.Sprintf("in-%d@example.com", i)}
+			if err := PersistThreadState(ctx, portal, inbound); err != nil {
+				t.Errorf("persist: %v", err)
+				return
+			}
+		}
+	}()
+	for i := 0; i < 50; i++ {
+		if _, err := ec.resolveThreadForPortalWithMetadata(portal); err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+	}
+	<-done
 }
