@@ -215,13 +215,16 @@ func (g *GmailHistoryPoller) pollOnce(ctx context.Context, cursor uint64, logger
 
 	var records []*gmail.History
 	var newCursor uint64
-	for _, lblID := range g.MonitoredLabelIDs {
+	for i, lblID := range g.MonitoredLabelIDs {
 		labelRecords, labelCursor, err := listHistory(ctx, svc, cursor, lblID)
 		if err != nil {
 			// historyId expired (Gmail keeps history for 7-30 days). When that
 			// happens, refresh the cursor to current via getProfile and skip the
 			// gap — we can't recover the missed messages without a full scan.
-			if isHistoryExpiredError(err) {
+			// Retention is mailbox-wide, so expiry fails the first label; a
+			// 404 after an earlier label succeeded from the same cursor has
+			// another cause, and resetting on it would skip mail every tick.
+			if i == 0 && isHistoryExpiredError(err) {
 				logger.Warn().Err(err).Uint64("cursor", cursor).
 					Msg("Gmail historyId cursor expired; resetting to current and skipping gap")
 				prof, perr := svc.Users.GetProfile("me").Context(ctx).Do()
@@ -505,7 +508,7 @@ func anyLabelMatches(a, b []string) bool {
 // SENT wins over everything, whatever order Gmail lists the labels in, so a
 // message carrying both INBOX and SENT (mail to yourself) counts as sent; then
 // INBOX; then the first monitored label the message carries; then the first
-// monitored label; "" if nothing is monitored.
+// monitored label, of which the poller always has at least one.
 func primaryLabel(messageLabels, monitored []string) string {
 	for _, want := range []string{"SENT", "INBOX"} {
 		if hasLabel(messageLabels, want) {
@@ -519,8 +522,5 @@ func primaryLabel(messageLabels, monitored []string) string {
 			}
 		}
 	}
-	if len(monitored) > 0 {
-		return monitored[0]
-	}
-	return ""
+	return monitored[0]
 }

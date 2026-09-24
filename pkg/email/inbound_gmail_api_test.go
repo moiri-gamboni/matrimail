@@ -25,6 +25,7 @@ type fakeGmail struct {
 	history  map[string]string // labelId -> history.list body
 	list     map[string]string // labelIds -> messages.list body
 	messages map[string]string // message id -> messages.get body
+	profile  string            // users.getProfile body
 
 	mu            sync.Mutex
 	historyLabels []string
@@ -38,9 +39,11 @@ func (f *fakeGmail) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/gmail/v1/users/me/history":
 		f.mu.Lock()
-		f.historyLabels = append(f.historyLabels, q["labelId"]...)
+		f.historyLabels = append(f.historyLabels, strings.Join(q["labelId"], "+"))
 		f.mu.Unlock()
 		body, ok = f.history[q.Get("labelId")]
+	case path == "/gmail/v1/users/me/profile":
+		body, ok = f.profile, f.profile != ""
 	case path == "/gmail/v1/users/me/messages":
 		body, ok = f.list[strings.Join(q["labelIds"], ",")]
 	case strings.HasPrefix(path, "/gmail/v1/users/me/messages/"):
@@ -124,7 +127,7 @@ func TestPollOnce_WatchesEveryLabelAndFeedsEachMessageOnce(t *testing.T) {
 	}
 
 	if strings.Join(f.historyLabels, ",") != "INBOX,SENT" {
-		t.Errorf("history.list was asked for labels %v; want one call per monitored label", f.historyLabels)
+		t.Errorf("history.list calls asked for labels %v; want one call per monitored label", f.historyLabels)
 	}
 	want := []fed{{"m-in", "INBOX"}, {"m-out", "SENT"}, {"m-self", "SENT"}}
 	if fmt.Sprint(*got) != fmt.Sprint(want) {
@@ -135,6 +138,52 @@ func TestPollOnce_WatchesEveryLabelAndFeedsEachMessageOnce(t *testing.T) {
 	// (the bridge drops a repeat by its ID); the newer one could skip one.
 	if cursor != 110 {
 		t.Errorf("cursor = %d; want 110, the older of the per-label cursors", cursor)
+	}
+}
+
+// History retention is mailbox-wide, so an expired cursor fails the first
+// label's call. A 404 on a later label, after an earlier one succeeded from the
+// same cursor, is something else -- a monitored label deleted in Gmail, say --
+// and resetting the cursor to "now" on it would skip every message on every
+// tick, silently. It must fail the tick instead, keeping the cursor.
+func TestPollOnce_NotFoundOnALaterLabelKeepsTheCursor(t *testing.T) {
+	t.Parallel()
+	f := &fakeGmail{
+		history: map[string]string{
+			"INBOX": `{"historyId":"110","history":[
+				{"id":"101","messagesAdded":[{"message":{"id":"m-in","threadId":"thread-1"}}]}]}`,
+		},
+		messages: map[string]string{"m-in": gmailMessage("m-in", 1000, "INBOX")},
+		profile:  `{"emailAddress":"me@example.com","historyId":"999"}`,
+	}
+	g, got := newTestPoller(t, f, "INBOX", "Label_deleted")
+	log := zerolog.Nop()
+
+	cursor, err := g.pollOnce(context.Background(), 100, &log)
+	if err == nil {
+		t.Errorf("pollOnce returned no error; the tick should fail and retry")
+	}
+	if cursor != 100 {
+		t.Errorf("cursor = %d; want 100 kept, not reset past unread messages", cursor)
+	}
+	if len(*got) != 0 {
+		t.Errorf("fed %v; want nothing from a failed tick, the retry reads it", *got)
+	}
+}
+
+// The expiry itself still resets the cursor to the mailbox's current position.
+func TestPollOnce_ExpiredCursorResetsToCurrent(t *testing.T) {
+	t.Parallel()
+	f := &fakeGmail{profile: `{"emailAddress":"me@example.com","historyId":"999"}`}
+	g, _ := newTestPoller(t, f, "INBOX", "SENT")
+	log := zerolog.Nop()
+
+	cursor, err := g.pollOnce(context.Background(), 100, &log)
+	if err != nil {
+		t.Fatalf("pollOnce: %v", err)
+	}
+	if cursor != 999 {
+		t.Errorf("cursor = %d; want 999 from getProfile", cursor)
 	}
 }
 
