@@ -34,6 +34,11 @@ import (
 //     processor). labelAdded is required so that post-arrival tagging (e.g. a
 //     separate Gmail filter or n8n workflow that applies the monitored label
 //     after delivery) is still surfaced to Matrix.
+//   - When OnThreadsChanged is set, make one more history.list call per tick
+//     with no label filter, historyTypes=[messageAdded,labelAdded,
+//     labelRemoved], and report the threads whose INBOX or UNREAD labels
+//     moved. An archived message has lost INBOX and so no longer matches a
+//     labelId=INBOX listing, and UNREAD is not a monitored label.
 //   - Persist the new historyId after each successful tick.
 //
 // Errors during a tick are logged and the cursor stays put — the next tick
@@ -70,6 +75,13 @@ type GmailHistoryPoller struct {
 	// users.messages.get(format=full) round-trip. Errors are logged but don't
 	// stop the poller. Required.
 	OnMessage func(ctx context.Context, msg *gmail.Message, mailbox string) error
+
+	// OnThreadsChanged, when set, receives the Gmail thread IDs whose archived
+	// or read state may have changed since the last tick: a message in them
+	// gained or lost INBOX or UNREAD, or a message arrived. An error fails the
+	// tick, so the same changes are reported again. Optional; when nil the
+	// poller makes no call for it.
+	OnThreadsChanged func(ctx context.Context, threadIDs []string) error
 
 	Log *zerolog.Logger
 
@@ -197,8 +209,9 @@ func (g *GmailHistoryPoller) bootstrapCursor(ctx context.Context) (uint64, error
 }
 
 // pollOnce lists history since cursor for every monitored label, feeds each
-// newly surfaced message to OnMessage once, in history order, and returns the
-// cursor to persist.
+// newly surfaced message to OnMessage once, in history order, reports the
+// threads whose state may have changed to OnThreadsChanged when it is set,
+// and returns the cursor to persist.
 //
 // users.history.list filters on a single labelId, so each monitored label is
 // listed separately and a message under two of them (mail to yourself carries
@@ -216,7 +229,7 @@ func (g *GmailHistoryPoller) pollOnce(ctx context.Context, cursor uint64, logger
 	var records []*gmail.History
 	var newCursor uint64
 	for i, lblID := range g.MonitoredLabelIDs {
-		labelRecords, labelCursor, err := listHistory(ctx, svc, cursor, lblID)
+		labelRecords, labelCursor, err := listHistory(ctx, svc, cursor, lblID, "messageAdded", "labelAdded")
 		if err != nil {
 			// historyId expired (Gmail keeps history for 7-30 days). When that
 			// happens, refresh the cursor to current via getProfile and skip the
@@ -245,13 +258,23 @@ func (g *GmailHistoryPoller) pollOnce(ctx context.Context, cursor uint64, logger
 		}
 	}
 
-	msgIDs := newMessageIDs(records, g.MonitoredLabelIDs)
-	if len(msgIDs) == 0 {
-		return newCursor, nil
+	var stateRecords []*gmail.History
+	if g.OnThreadsChanged != nil {
+		var stateCursor uint64
+		stateRecords, stateCursor, err = listHistory(ctx, svc, cursor, "", "messageAdded", "labelAdded", "labelRemoved")
+		if err != nil {
+			return cursor, err
+		}
+		logger.Debug().Uint64("history_id", stateCursor).Interface("records", stateRecords).
+			Msg("Gmail history.list response (all labels)")
+		newCursor = min(newCursor, stateCursor)
 	}
-	logger.Debug().Int("new_messages", len(msgIDs)).Uint64("from", cursor).Uint64("to", newCursor).
-		Msg("Gmail history poll: fetching new messages")
 
+	msgIDs := newMessageIDs(records, g.MonitoredLabelIDs)
+	if len(msgIDs) > 0 {
+		logger.Debug().Int("new_messages", len(msgIDs)).Uint64("from", cursor).Uint64("to", newCursor).
+			Msg("Gmail history poll: fetching new messages")
+	}
 	for _, msgID := range msgIDs {
 		full, err := svc.Users.Messages.Get("me", msgID).Format("full").Context(ctx).Do()
 		if err != nil {
@@ -260,22 +283,68 @@ func (g *GmailHistoryPoller) pollOnce(ctx context.Context, cursor uint64, logger
 		}
 		g.feed(ctx, full, logger)
 	}
+
+	// After the messages, so a thread that just gained its first bridged
+	// message already has a room when its state is looked at.
+	if threadIDs := stateChangedThreadIDs(stateRecords); len(threadIDs) > 0 {
+		if err := g.OnThreadsChanged(ctx, threadIDs); err != nil {
+			return cursor, fmt.Errorf("record thread state changes: %w", err)
+		}
+	}
 	return newCursor, nil
 }
 
-// listHistory drains users.history.list for one label, returning its records
-// and the highest historyId the responses reported, which is where this
-// label's history can resume.
-func listHistory(ctx context.Context, svc *gmail.Service, cursor uint64, labelID string) ([]*gmail.History, uint64, error) {
+// stateChangedThreadIDs returns, each once and in history order, the threads
+// whose archived or read state the records may have changed: a message gained
+// or lost INBOX or UNREAD, or a message arrived.
+func stateChangedThreadIDs(records []*gmail.History) []string {
+	sort.SliceStable(records, func(i, j int) bool { return records[i].Id < records[j].Id })
+
+	var ids []string
+	seen := map[string]bool{}
+	add := func(m *gmail.Message) {
+		if m == nil || m.ThreadId == "" || seen[m.ThreadId] {
+			return
+		}
+		seen[m.ThreadId] = true
+		ids = append(ids, m.ThreadId)
+	}
+	stateLabels := []string{"INBOX", "UNREAD"}
+	for _, h := range records {
+		for _, ma := range h.MessagesAdded {
+			if ma != nil {
+				add(ma.Message)
+			}
+		}
+		for _, la := range h.LabelsAdded {
+			if la != nil && anyLabelMatches(la.LabelIds, stateLabels) {
+				add(la.Message)
+			}
+		}
+		for _, lr := range h.LabelsRemoved {
+			if lr != nil && anyLabelMatches(lr.LabelIds, stateLabels) {
+				add(lr.Message)
+			}
+		}
+	}
+	return ids
+}
+
+// listHistory drains users.history.list for one label, or for the whole
+// mailbox when labelID is empty, returning its records and the highest
+// historyId the responses reported, which is where this listing can resume.
+func listHistory(ctx context.Context, svc *gmail.Service, cursor uint64, labelID string, historyTypes ...string) ([]*gmail.History, uint64, error) {
 	var records []*gmail.History
 	labelCursor := cursor
 	pageToken := ""
 	for {
 		call := svc.Users.History.List("me").
 			StartHistoryId(cursor).
-			HistoryTypes("messageAdded", "labelAdded").
-			LabelId(labelID).
+			HistoryTypes(historyTypes...).
 			Context(ctx)
+		if labelID != "" {
+			call = call.LabelId(labelID)
+		}
 		if pageToken != "" {
 			call = call.PageToken(pageToken)
 		}

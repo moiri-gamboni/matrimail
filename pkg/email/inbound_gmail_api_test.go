@@ -29,6 +29,7 @@ type fakeGmail struct {
 
 	mu            sync.Mutex
 	historyLabels []string
+	historyTypes  []string // historyTypes of each history.list call, comma-joined
 }
 
 func (f *fakeGmail) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -40,6 +41,7 @@ func (f *fakeGmail) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/gmail/v1/users/me/history":
 		f.mu.Lock()
 		f.historyLabels = append(f.historyLabels, strings.Join(q["labelId"], "+"))
+		f.historyTypes = append(f.historyTypes, strings.Join(q["historyTypes"], ","))
 		f.mu.Unlock()
 		body, ok = f.history[q.Get("labelId")]
 	case path == "/gmail/v1/users/me/profile":
@@ -285,5 +287,83 @@ func TestBacklog_FeedsOldestFirst(t *testing.T) {
 	}
 	if strings.Join(order, ",") != "m1,m2,m3,m4,m5,m6" {
 		t.Errorf("fed in order %v; want oldest first, m1 to m6", order)
+	}
+}
+
+// Archiving a thread removes INBOX from its messages, and a message without
+// INBOX no longer matches a labelId=INBOX listing, so the per-label calls
+// cannot be relied on to report it; UNREAD is never a monitored label. With a
+// thread-state callback set, the poller makes one more history.list call with
+// no label filter and reports every thread whose INBOX or UNREAD label moved,
+// or that gained a message (new mail puts INBOX back on an archived thread).
+// A label change the state does not depend on is not reported.
+func TestPollOnce_ReportsThreadsWhoseInboxOrUnreadChanged(t *testing.T) {
+	t.Parallel()
+	f := &fakeGmail{
+		history: map[string]string{
+			"INBOX": `{"historyId":"130","history":[
+				{"id":"105","messagesAdded":[{"message":{"id":"m-new","threadId":"t-new"}}]}]}`,
+			"": `{"historyId":"120","history":[
+				{"id":"101","labelsRemoved":[{"message":{"id":"m1","threadId":"t-archived"},"labelIds":["INBOX"]}]},
+				{"id":"102","labelsAdded":[{"message":{"id":"m2","threadId":"t-unread"},"labelIds":["UNREAD"]}]},
+				{"id":"103","labelsRemoved":[{"message":{"id":"m3","threadId":"t-read"},"labelIds":["UNREAD","IMPORTANT"]}]},
+				{"id":"104","labelsAdded":[{"message":{"id":"m4","threadId":"t-starred"},"labelIds":["STARRED"]}]},
+				{"id":"105","messagesAdded":[{"message":{"id":"m-new","threadId":"t-new"}}]},
+				{"id":"106","labelsAdded":[{"message":{"id":"m5","threadId":"t-archived"},"labelIds":["INBOX"]}]}]}`,
+		},
+		messages: map[string]string{"m-new": gmailMessage("m-new", 1000, "INBOX", "UNREAD")},
+	}
+	g, got := newTestPoller(t, f, "INBOX")
+	var changed []string
+	g.OnThreadsChanged = func(ctx context.Context, threadIDs []string) error {
+		changed = append(changed, threadIDs...)
+		return nil
+	}
+	log := zerolog.Nop()
+
+	cursor, err := g.pollOnce(context.Background(), 100, &log)
+	if err != nil {
+		t.Fatalf("pollOnce: %v", err)
+	}
+
+	if strings.Join(changed, ",") != "t-archived,t-unread,t-read,t-new" {
+		t.Errorf("reported threads %v; want t-archived,t-unread,t-read,t-new, each once, in history order", changed)
+	}
+	if strings.Join(f.historyLabels, ",") != "INBOX," {
+		t.Errorf("history.list label filters %q; want the monitored label, then one unfiltered call", f.historyLabels)
+	}
+	if last := f.historyTypes[len(f.historyTypes)-1]; last != "messageAdded,labelAdded,labelRemoved" {
+		t.Errorf("unfiltered call asked for historyTypes %q; want messageAdded,labelAdded,labelRemoved", last)
+	}
+	if fmt.Sprint(*got) != fmt.Sprint([]fed{{"m-new", "INBOX"}}) {
+		t.Errorf("fed %v; new mail must still be bridged", *got)
+	}
+	if cursor != 120 {
+		t.Errorf("cursor = %d; want 120, the oldest cursor of all calls", cursor)
+	}
+}
+
+// A thread change the callback could not record fails the tick, so the cursor
+// stays put and the next tick reports the change again rather than losing it.
+func TestPollOnce_ThreadCallbackFailureKeepsTheCursor(t *testing.T) {
+	t.Parallel()
+	f := &fakeGmail{
+		history: map[string]string{
+			"INBOX": `{"historyId":"110","history":[]}`,
+			"":      `{"historyId":"110","history":[{"id":"101","labelsRemoved":[{"message":{"id":"m1","threadId":"t1"},"labelIds":["INBOX"]}]}]}`,
+		},
+	}
+	g, _ := newTestPoller(t, f, "INBOX")
+	g.OnThreadsChanged = func(ctx context.Context, threadIDs []string) error {
+		return fmt.Errorf("database is locked")
+	}
+	log := zerolog.Nop()
+
+	cursor, err := g.pollOnce(context.Background(), 100, &log)
+	if err == nil {
+		t.Errorf("pollOnce returned no error; an unrecorded change must fail the tick")
+	}
+	if cursor != 100 {
+		t.Errorf("cursor = %d; want 100 kept", cursor)
 	}
 }
