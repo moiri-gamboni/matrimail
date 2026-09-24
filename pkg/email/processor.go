@@ -29,7 +29,6 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/id"
 )
 
 // Matrix content size limits and thresholds
@@ -45,12 +44,6 @@ const (
 	// PerEventTarget is the conservative per-event target for chunked content (16 KiB)
 	// Use conservative target to account for encryption overhead
 	PerEventTarget = 16 * 1024
-)
-
-// Pre-compiled regex patterns for performance
-var (
-	reImgCidSrc = regexp.MustCompile(`(?i)(src\s*=\s*)(['"])\s*cid:([^'"\s)]+)`)
-	reCSSCidURL = regexp.MustCompile(`(?i)url\(\s*cid:([^) \t\r\n]+)\s*\)`)
 )
 
 // DedupChecker reports whether a given (receiver, messageID) pair was sent by
@@ -1029,16 +1022,6 @@ func (p *Processor) ToMatrixEvent(ctx context.Context, emailMsg *EmailMessage, u
 
 // EmailMatrixEvent and helper functions
 
-// InlineImageMeta holds metadata for an inline image we plan to post as a sidecar m.image
-// Index preserves document order for nice numbering.
-type InlineImageMeta struct {
-	Index int
-	Label string
-	MXC   id.ContentURIString
-	Mime  string
-	Size  int
-}
-
 // EmailMatrixEvent implements bridgev2.RemoteMessage for email messages
 type EmailMatrixEvent struct {
 	emailMessage *EmailMessage
@@ -1114,191 +1097,37 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 		}
 	}()
 
-	// Preprocess inline images for HTML
-	// Pre-size maps based on typical attachment counts to reduce allocations
-	attachmentCount := len(e.emailMessage.Attachments)
-	usedInline := make(map[int]bool, attachmentCount)
-	// For CSS url(cid:...) rewriting later
-	cidToMXC := make(map[string]string, attachmentCount)
-	locToMXC := make(map[string]string, attachmentCount)
-	// Inline images we will send as sidecar m.image events, in document order
-	// Pre-allocate with reasonable capacity to reduce reallocations
-	inlineImages := make([]*InlineImageMeta, 0, attachmentCount/2)
-	nextIndex := 1
-
+	// The portal's room exists before any message is converted: bridgev2
+	// creates it first, with its encryption state recorded.
+	roomID := portal.MXID
+	attachments := e.emailMessage.Attachments
 	origHTML := e.emailMessage.HTMLContent
 	e.processor.log.Debug().
-		Int("attachments", len(e.emailMessage.Attachments)).
+		Int("attachments", len(attachments)).
 		Int("text_len", len(e.emailMessage.TextContent)).
 		Int("html_len", len(origHTML)).
 		Msg("Converting email to Matrix event")
-	if origHTML != "" {
-		// Early lightweight minification to save space without harming formatting
-		if len(origHTML) > 30*1024 {
-			origHTML = lightMinifyHTML(origHTML)
-		}
-		// Externalize data: URLs to MXC and rewrite references. Also get metas for those images.
-		dataURIsReplaced, replacedCount, failedCount, dataMetas := e.externalizeDataURIs(ctx, intent, origHTML)
-		if replacedCount > 0 || failedCount > 0 {
-			if replacedCount > 0 {
-				n := &event.MessageEventContent{MsgType: event.MsgNotice, Body: fmt.Sprintf("Optimized inline resources: moved %d embedded data URLs to media.", replacedCount)}
-				appendPart("html-inline-optimized", n)
-			}
-			if failedCount > 0 {
-				n := &event.MessageEventContent{MsgType: event.MsgNotice, Body: fmt.Sprintf("Some embedded data URLs were too large or invalid and were omitted (%d).", failedCount)}
-				appendPart("html-inline-omitted", n)
-			}
-		}
-		origHTML = dataURIsReplaced
-
-		// Build quick lookups for attachments by CID and Content-Location
-		// We'll process <img> tags in document order, upload needed parts, and replace with placeholders.
-		// Prepare a regex to find <img ...> tags.
-		reImgTag := regexp.MustCompile(`(?is)<\s*img\b[^>]*>`)
-		// Attribute extractors
-		extractAttr := func(tag, name string) string {
-			re := regexp.MustCompile(`(?i)` + name + `\s*=\s*([\'\"][^\'\"]*[\'\"]|[^\s>]+)`)
-			m := re.FindStringSubmatch(tag)
-			if len(m) < 2 {
-				return ""
-			}
-			val := strings.TrimSpace(m[1])
-			if strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"") {
-				val = strings.TrimSuffix(strings.TrimPrefix(val, "\""), "\"")
-			}
-			if strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'") {
-				val = strings.TrimSuffix(strings.TrimPrefix(val, "'"), "'")
-			}
-			return val
-		}
-
-		// Process tags in order
-		occurrence := 0
-		origHTML = reImgTag.ReplaceAllStringFunc(origHTML, func(tag string) string {
-			occurrence++
-			src := strings.TrimSpace(extractAttr(tag, "src"))
-			alt := strings.TrimSpace(extractAttr(tag, "alt"))
-			if alt == "" {
-				alt = strings.TrimSpace(extractAttr(tag, "title"))
-			}
-			low := strings.ToLower(src)
-			// Helper: record the inline image meta (used by the plain-text
-			// fallback and by the sidecar emission below) and emit an <img>
-			// tag pointing at the uploaded mxc URI inline. Element renders
-			// mxc img tags in formatted_body natively, so this gives proper
-			// inline image display rather than a "[Image N: label]" text stub.
-			add := func(mxc id.ContentURIString, mime string, sz int, defaultLabel string) string {
-				label := defaultLabel
-				if alt != "" {
-					label = alt
-				}
-				meta := &InlineImageMeta{Index: nextIndex, Label: label, MXC: mxc, Mime: mime, Size: sz}
-				inlineImages = append(inlineImages, meta)
-				nextIndex++
-				// HTML-escape the alt text so a hostile filename can't break out of the attribute.
-				safeAlt := html.EscapeString(label)
-				return fmt.Sprintf(`<img src="%s" alt="%s">`, string(mxc), safeAlt)
-			}
-			// Remote images: never fetch, remove placeholders entirely to reduce clutter
-			if strings.HasPrefix(low, "http:") || strings.HasPrefix(low, "https:") {
-				// Remove remote images entirely - they're usually tracking/marketing content
-				return ""
-			}
-			// Data URIs should have been externalized to mxc already. If src is mxc, try to match a data meta.
-			if strings.HasPrefix(low, "mxc://") {
-				for _, dm := range dataMetas {
-					if strings.EqualFold(string(dm.MXC), src) {
-						return add(dm.MXC, dm.Mime, dm.Size, dm.Label)
-					}
-				}
-				// Unknown mxc: show a generic placeholder without sidecar
-				return "[Image]"
-			}
-			// CID-referenced inline
-			if strings.HasPrefix(low, "cid:") {
-				cid := normalizeCIDRef(src)
-				idx := findAttachmentByCID(e.emailMessage.Attachments, cid)
-				if idx >= 0 {
-					att := e.emailMessage.Attachments[idx]
-					if e.processor.MaxUploadBytes > 0 && att.Size > int64(e.processor.MaxUploadBytes) {
-						return "[Image omitted: too large]"
-					}
-					mxc, _, err := intent.UploadMedia(ctx, "", att.Data, bestFilename(att, cid), att.ContentType)
-					if err == nil {
-						cidToMXC[cid] = string(mxc)
-						usedInline[idx] = true
-						return add(mxc, att.ContentType, int(att.Size), bestFilename(att, cid))
-					}
-				}
-				return "[Image]"
-			}
-			// Content-Location relative reference (non-http, non-cid, non-data)
-			if low != "" && !strings.HasPrefix(low, "data:") && !strings.HasPrefix(low, "http:") && !strings.HasPrefix(low, "https:") {
-				key := normalizeContentLocation(src)
-				idx := findAttachmentByContentLocation(e.emailMessage.Attachments, key)
-				if idx >= 0 {
-					att := e.emailMessage.Attachments[idx]
-					if e.processor.MaxUploadBytes > 0 && att.Size > int64(e.processor.MaxUploadBytes) {
-						return "[Image omitted: too large]"
-					}
-					mxc, _, err := intent.UploadMedia(ctx, "", att.Data, bestFilename(att, key), att.ContentType)
-					if err == nil {
-						locToMXC[key] = string(mxc)
-						usedInline[idx] = true
-						return add(mxc, att.ContentType, int(att.Size), bestFilename(att, key))
-					}
-				}
-				return "[Image]"
-			}
-			// Fallback
-			return "[Image]"
-		})
-
-		// After removing <img> tags, still rewrite CSS backgrounds referencing cid:
-		rewritten := rewriteHTMLInline(origHTML, cidToMXC, locToMXC)
-
-		// Materialize CSS / Outlook background images as inline <img> tags
-		// so they survive Matrix's HTML sanitizer (which strips `style` and
-		// the legacy `background` attribute). Uploads any cid that was only
-		// referenced via a background and isn't already in cidToMXC.
-		uploadBG := func(cid string) (string, string) {
-			idx := findAttachmentByCID(e.emailMessage.Attachments, cid)
-			if idx < 0 {
-				return "", ""
-			}
-			att := e.emailMessage.Attachments[idx]
-			if e.processor.MaxUploadBytes > 0 && att.Size > int64(e.processor.MaxUploadBytes) {
-				return "", ""
-			}
-			mxc, _, err := intent.UploadMedia(ctx, "", att.Data, bestFilename(att, cid), att.ContentType)
-			if err != nil {
-				e.processor.log.Warn().Err(err).Str("cid", cid).Msg("Failed to upload cid background image")
-				return "", ""
-			}
-			usedInline[idx] = true
-			// Record so the inline-images sidecar path can see it; the meta
-			// label is generic since the only reference was a background.
-			inlineImages = append(inlineImages, &InlineImageMeta{
-				Index: nextIndex,
-				Label: bestFilename(att, cid),
-				MXC:   mxc,
-				Mime:  att.ContentType,
-				Size:  int(att.Size),
-			})
-			nextIndex++
-			return string(mxc), att.ContentType
-		}
-		rewritten = MaterializeBackgroundImages(rewritten, cidToMXC, uploadBG)
-
-		e.processor.log.Debug().
-			Int("inline_images", len(inlineImages)).
-			Int("new_html_len", len(rewritten)).
-			Msg("Processed inline <img> tags and rewrote CSS backgrounds")
-		origHTML = rewritten
+	// Early lightweight minification to save space without harming formatting
+	if len(origHTML) > 30*1024 {
+		origHTML = lightMinifyHTML(origHTML)
 	}
+	usedInline := referencedInline(attachments, origHTML)
 
 	isReply := e.emailMessage.InReplyTo != "" || len(e.emailMessage.References) > 0
 	bodyText, origHTML := displayBodies(e.emailMessage.TextContent, origHTML, isReply)
+	// Only the images the displayed HTML shows are sent; those in stripped
+	// quoted history stay out, as do their attachments (usedInline).
+	// The marketing heuristic counts <img> tags, so it reads the HTML
+	// before the images are taken out.
+	displayedHTML := origHTML
+	var inlineImages []*inlineImage
+	if origHTML != "" {
+		origHTML, inlineImages = extractInlineImages(attachments, origHTML)
+		e.processor.log.Debug().
+			Int("inline_images", len(inlineImages)).
+			Int("new_html_len", len(origHTML)).
+			Msg("Took inline images out of the HTML")
+	}
 	// Avoid duplicating large content when HTML is present: summarize body
 	if origHTML != "" && len(bodyText) > 2048 {
 		short, _ := truncateUTF8PreserveWords(bodyText, 1000)
@@ -1317,7 +1146,7 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 		}
 		b.WriteString("Images:\n")
 		for _, im := range inlineImages {
-			b.WriteString(fmt.Sprintf(" - Image %d: %s\n", im.Index, im.Label))
+			b.WriteString(fmt.Sprintf(" - Image %d: %s\n", im.index, im.label))
 		}
 		content.Body = strings.TrimRight(b.String(), "\n")
 	}
@@ -1345,14 +1174,6 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 		content.Body = "[No text content]"
 	}
 
-	// htmlAttachedAsFile tracks whether the original HTML ends up uploaded as
-	// a sidecar file (because it was either too large to ship as
-	// formatted_body or detected as marketing-heavy and intentionally
-	// dropped). When true, inline images are already visible in that
-	// attachment — emitting m.image sidecars too would produce duplicate
-	// (and often broken) image events.
-	htmlAttachedAsFile := false
-
 	// Marketing-heavy emails (Miro/Mailchimp/etc. style: nested tables,
 	// CSS background images, little real text) render in Matrix as walls
 	// of empty bordered boxes because the sanitizer strips the inline
@@ -1360,7 +1181,7 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 	// entirely and force the attach-as-file branch below — the user gets
 	// the readable plain text in Matrix and the full HTML as a clickable
 	// attachment.
-	forceHTMLAttach := origHTML != "" && content.FormattedBody != "" && IsLikelyMarketingHTML(origHTML, bodyText)
+	forceHTMLAttach := origHTML != "" && content.FormattedBody != "" && IsLikelyMarketingHTML(displayedHTML, bodyText)
 
 	// Step 1: If we have HTML, try to keep it by minifying when necessary
 	if (forceHTMLAttach || !withinMatrixLimit(content, MaxMatrixContentSize)) && content.FormattedBody != "" {
@@ -1406,24 +1227,15 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 				n := &event.MessageEventContent{MsgType: event.MsgNotice, Body: "HTML body too large to attach; content was omitted."}
 				appendPart("html-oversize-omitted", n)
 			} else {
-				mxc, _, err := intent.UploadMedia(ctx, "", htmlBytes, filename, mimeType)
-				if err != nil {
-					e.processor.log.Warn().Err(err).Msg("Failed to upload full HTML, sending notice instead")
-					n := &event.MessageEventContent{MsgType: event.MsgNotice, Body: "Failed to upload full HTML content."}
-					parts = append(parts, &bridgev2.ConvertedMessagePart{Type: event.EventMessage, Content: n})
-				} else {
-					if noticeText != "" {
-						n := &event.MessageEventContent{MsgType: event.MsgNotice, Body: noticeText}
-						appendPart("html-inline-notice", n)
-					} else {
-						n := &event.MessageEventContent{MsgType: event.MsgNotice, Body: "Full HTML was too large to send inline — attached for review."}
-						parts = append(parts, &bridgev2.ConvertedMessagePart{Type: event.EventMessage, Content: n})
+				file := &EmailAttachment{Filename: filename, ContentType: mimeType, Size: int64(len(htmlBytes)), Data: htmlBytes}
+				part, ok := e.mediaPart(ctx, intent, roomID, "html-attachment", file, event.MsgFile, filename)
+				if ok {
+					if noticeText == "" {
+						noticeText = "Full HTML was too large to send inline — attached for review."
 					}
-					att := &event.MessageEventContent{MsgType: event.MsgFile, Body: filename, URL: mxc}
-					att.Info = &event.FileInfo{MimeType: mimeType, Size: len(htmlBytes)}
-					appendPart("html-attachment", att)
-					htmlAttachedAsFile = true
+					appendPart("html-inline-notice", &event.MessageEventContent{MsgType: event.MsgNotice, Body: noticeText})
 				}
+				parts = append(parts, part)
 			}
 		}
 	}
@@ -1463,16 +1275,12 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 			n := &event.MessageEventContent{MsgType: event.MsgNotice, Body: "Text body too large to attach; only truncated body was sent."}
 			appendPart("text-oversize-omitted", n)
 		} else {
-			mxc, _, err := intent.UploadMedia(ctx, "", textBytes, filename, mimeType)
-			if err != nil {
-				e.processor.log.Warn().Err(err).Msg("Failed to upload full text, proceeding with truncated body only")
-			} else {
-				n := &event.MessageEventContent{MsgType: event.MsgNotice, Body: noticeText}
-				appendPart("text-attachment-notice", n)
-				att := &event.MessageEventContent{MsgType: event.MsgFile, Body: filename, URL: mxc}
-				att.Info = &event.FileInfo{MimeType: mimeType, Size: len(textBytes)}
-				appendPart("text-attachment", att)
+			file := &EmailAttachment{Filename: filename, ContentType: mimeType, Size: int64(len(textBytes)), Data: textBytes}
+			part, ok := e.mediaPart(ctx, intent, roomID, "text-attachment", file, event.MsgFile, filename)
+			if ok {
+				appendPart("text-attachment-notice", &event.MessageEventContent{MsgType: event.MsgNotice, Body: noticeText})
 			}
+			parts = append(parts, part)
 		}
 	}
 
@@ -1542,51 +1350,20 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 		}
 	}
 
-	// Emit sidecar image messages for inline images in document order, BUT
-	// only when the HTML formatted_body was dropped (size constraints) or
-	// never existed — otherwise the inline <img src="mxc://..."> tags inside
-	// formatted_body already render the image in Element, and emitting a
-	// sidecar m.image event on top creates a duplicate "image card" below
-	// the body. Keeping the sidecar as a fallback means HTML-stripped events
-	// and plain-text-only Matrix clients still see the image.
-	// Emit sidecars only when the formatted_body is gone AND the HTML wasn't
-	// attached as a file (which already contains the inline images). Even
-	// then, skip "decorative" images — tracking pixels, signature logos, and
-	// other small assets that produce broken-image cards more often than they
-	// add value. Real photos and screenshots tend to be well above the
-	// decorative threshold.
-	emitSidecars := content.FormattedBody == "" && !htmlAttachedAsFile
-	if emitSidecars {
-		for _, im := range inlineImages {
-			if isLikelyDecorativeImage(im) {
-				continue
-			}
-			pid := fmt.Sprintf("inline-image-%d", im.Index)
-			imgContent := &event.MessageEventContent{
-				MsgType: event.MsgImage,
-				Body:    fmt.Sprintf("Image %d: %s", im.Index, im.Label),
-				URL:     im.MXC,
-			}
-			imgContent.Info = &event.FileInfo{MimeType: im.Mime, Size: im.Size}
-			parts = append(parts, &bridgev2.ConvertedMessagePart{ID: networkid.PartID(pid), Type: event.EventMessage, Content: imgContent})
-		}
+	// Inline images follow the text, in the order the HTML shows them.
+	for _, im := range inlineImages {
+		pid := fmt.Sprintf("inline-image-%d", im.index)
+		part, _ := e.mediaPart(ctx, intent, roomID, pid, im.att, event.MsgImage, fmt.Sprintf("Image %d: %s", im.index, im.label))
+		parts = append(parts, part)
 	}
 
-	// Process attachments and upload them to Matrix (skip those used inline)
-	for idx, attachment := range e.emailMessage.Attachments {
-		if usedInline[idx] {
+	for idx, attachment := range attachments {
+		if usedInline[attachment] {
 			continue
 		}
-		if attachmentPart, err := e.convertAttachmentToMatrix(ctx, attachment, intent); err == nil {
-			if attachmentPart != nil {
-				attachmentPart.ID = networkid.PartID(fmt.Sprintf("att-%d-%s", idx+1, sanitizeFilename(attachment.Filename)))
-				parts = append(parts, attachmentPart)
-			}
-		} else {
-			e.processor.log.Warn().Err(err).Str("filename", attachment.Filename).Msg("Failed to upload attachment to Matrix")
-			fallbackContent := &event.MessageEventContent{MsgType: event.MsgNotice, Body: fmt.Sprintf("📎 Attachment failed to upload: %s (%s)", attachment.Filename, attachment.ContentType)}
-			parts = append(parts, &bridgev2.ConvertedMessagePart{Type: event.EventMessage, Content: fallbackContent})
-		}
+		pid := fmt.Sprintf("att-%d-%s", idx+1, sanitizeFilename(attachment.Filename))
+		part, _ := e.mediaPart(ctx, intent, roomID, pid, attachment, attachmentMsgType(attachment.ContentType), attachment.Filename)
+		parts = append(parts, part)
 	}
 
 	return &bridgev2.ConvertedMessage{Parts: parts}, nil
@@ -1752,64 +1529,8 @@ func truncateUTF8PreserveWords(s string, maxBytes int) (string, bool) {
 	return s[:cut], true
 }
 
-// convertAttachmentToMatrix uploads an email attachment to Matrix and returns a ConvertedMessagePart
-func (e *EmailMatrixEvent) convertAttachmentToMatrix(ctx context.Context, attachment *EmailAttachment, intent bridgev2.MatrixAPI) (*bridgev2.ConvertedMessagePart, error) {
-	e.processor.log.Debug().
-		Str("filename", attachment.Filename).
-		Str("content_type", attachment.ContentType).
-		Int64("size", attachment.Size).
-		Msg("Uploading email attachment to Matrix")
-
-	// Enforce upload size limit for general attachments
-	if e.processor.MaxUploadBytes > 0 && attachment.Size > int64(e.processor.MaxUploadBytes) {
-		return nil, fmt.Errorf("attachment exceeds upload limit (%d bytes > %d bytes)", attachment.Size, e.processor.MaxUploadBytes)
-	}
-
-	// Sanitize filename for upload
-	safeName := sanitizeFilename(attachment.Filename)
-	if safeName == "" {
-		safeName = bestFilename(attachment, "attachment")
-		safeName = sanitizeFilename(safeName)
-	}
-	// Upload the attachment data to Matrix media repository
-	uploadResp, _, err := intent.UploadMedia(ctx, "", attachment.Data, safeName, attachment.ContentType)
-	if err != nil {
-		return nil, fmt.Errorf("failed to upload attachment to Matrix: %w", err)
-	}
-
-	// Determine the message type based on content type
-	msgType := e.getMessageTypeForAttachment(attachment.ContentType)
-
-	// Create the Matrix message content for the attachment
-	content := &event.MessageEventContent{
-		MsgType: msgType,
-		Body:    attachment.Filename,
-		URL:     uploadResp,
-	}
-
-	// Add basic file info - Matrix will handle the appropriate type
-	content.Info = &event.FileInfo{
-		MimeType: attachment.ContentType,
-		Size:     int(attachment.Size),
-	}
-
-	// For images and videos, we could add more specific info in the future
-	// but for now, basic FileInfo works for all types
-
-	e.processor.log.Info().
-		Str("filename", attachment.Filename).
-		Str("matrix_url", string(content.URL)).
-		Str("msg_type", string(msgType)).
-		Msg("Successfully uploaded attachment to Matrix")
-
-	return &bridgev2.ConvertedMessagePart{
-		Type:    event.EventMessage,
-		Content: content,
-	}, nil
-}
-
-// getMessageTypeForAttachment determines the appropriate Matrix message type for an attachment
-func (e *EmailMatrixEvent) getMessageTypeForAttachment(contentType string) event.MessageType {
+// attachmentMsgType picks the Matrix message type for an attachment.
+func attachmentMsgType(contentType string) event.MessageType {
 	switch {
 	case strings.HasPrefix(contentType, "image/"):
 		return event.MsgImage
@@ -1899,143 +1620,6 @@ func sanitizeFilename(name string) string {
 		name = name[:maxLen]
 	}
 	return name
-}
-
-// externalizeDataURIs finds data: URLs in HTML, uploads them to media, and rewrites to mxc URLs.
-// Returns (rewrittenHTML, replaced, failed)
-func (e *EmailMatrixEvent) externalizeDataURIs(ctx context.Context, intent bridgev2.MatrixAPI, html string) (string, int, int, []*InlineImageMeta) {
-	out := html
-	var metas []*InlineImageMeta
-	reDataImg, err := regexp.Compile(`(?i)(src\s*=\s*)(['"])\s*data:([a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+);base64,([a-z0-9+/=]+)\s*['\"]`)
-	if err != nil {
-		// If the regex fails to compile for any reason, don't panic; just skip externalization.
-		return out, 0, 0, metas
-	}
-	reDataCSS, err := regexp.Compile(`(?i)url\(\s*data:([a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+);base64,([a-z0-9+/=]+)\s*\)`)
-	if err != nil {
-		return out, 0, 0, metas
-	}
-	replaced := 0
-	failed := 0
-	// Replace <img src="data:...">
-	out = reDataImg.ReplaceAllStringFunc(out, func(m string) string {
-		subs := reDataImg.FindStringSubmatch(m)
-		if len(subs) < 5 {
-			return m
-		}
-		attr := subs[1]
-		quote := subs[2]
-		mimeType := strings.ToLower(subs[3])
-		b64 := subs[4]
-		data, err := base64.StdEncoding.DecodeString(b64)
-		if err != nil {
-			failed++
-			return m
-		}
-		if e.processor.MaxUploadBytes > 0 && len(data) > e.processor.MaxUploadBytes {
-			failed++
-			return m
-		}
-		name := "inline"
-		if strings.HasPrefix(mimeType, "image/") {
-			name = "inline." + strings.TrimPrefix(mimeType, "image/")
-		}
-		name = sanitizeFilename(name)
-		mxc, _, err := intent.UploadMedia(ctx, "", data, name, mimeType)
-		if err != nil {
-			failed++
-			return m
-		}
-		replaced++
-		metas = append(metas, &InlineImageMeta{Label: name, MXC: mxc, Mime: mimeType, Size: len(data)})
-		return attr + quote + string(mxc) + quote
-	})
-	// Replace CSS url(data:...)
-	out = reDataCSS.ReplaceAllStringFunc(out, func(m string) string {
-		subs := reDataCSS.FindStringSubmatch(m)
-		if len(subs) < 3 {
-			return m
-		}
-		mimeType := strings.ToLower(subs[1])
-		b64 := subs[2]
-		data, err := base64.StdEncoding.DecodeString(b64)
-		if err != nil {
-			failed++
-			return m
-		}
-		if e.processor.MaxUploadBytes > 0 && len(data) > e.processor.MaxUploadBytes {
-			failed++
-			return m
-		}
-		name := "inline"
-		name = sanitizeFilename(name)
-		mxc, _, err := intent.UploadMedia(ctx, "", data, name, mimeType)
-		if err != nil {
-			failed++
-			return m
-		}
-		replaced++
-		metas = append(metas, &InlineImageMeta{Label: name, MXC: mxc, Mime: mimeType, Size: len(data)})
-		return "url(" + string(mxc) + ")"
-	})
-	return out, replaced, failed, metas
-}
-
-// rewriteHTMLInline replaces cid: and content-location references with mxc urls
-func rewriteHTMLInline(html string, cidToMXC map[string]string, locToMXC map[string]string) string {
-	out := html
-	// Replace cid: in img src and preserve the original quoting using pre-compiled regex
-	out = reImgCidSrc.ReplaceAllStringFunc(out, func(m string) string {
-		subs := reImgCidSrc.FindStringSubmatch(m)
-		if len(subs) > 3 {
-			attr := subs[1]  // src=
-			quote := subs[2] // ' or "
-			cidRef := subs[3]
-			cid := normalizeCIDRef(cidRef)
-			if mxc, ok := cidToMXC[cid]; ok && mxc != "" {
-				return attr + quote + mxc + quote
-			}
-		}
-		return m
-	})
-
-	// Replace CSS url(cid:...) using pre-compiled regex
-	out = reCSSCidURL.ReplaceAllStringFunc(out, func(m string) string {
-		subs := reCSSCidURL.FindStringSubmatch(m)
-		if len(subs) > 1 {
-			cid := normalizeCIDRef(subs[1])
-			if mxc, ok := cidToMXC[cid]; ok && mxc != "" {
-				return "url(" + mxc + ")"
-			}
-		}
-		return m
-	})
-	// Replace content-location src references
-	reLoc, err := regexp.Compile(`(?i)src\s*=\s*(['\"])([^'\"]+)(['\"])`)
-	if err == nil {
-		out = reLoc.ReplaceAllStringFunc(out, func(m string) string {
-			subs := reLoc.FindStringSubmatch(m)
-			if len(subs) > 3 {
-				open := subs[1]
-				val := subs[2]
-				close := subs[3]
-				// ensure matching quotes
-				if open != close {
-					return m
-				}
-				low := strings.ToLower(val)
-				if strings.HasPrefix(low, "http:") || strings.HasPrefix(low, "https:") || strings.HasPrefix(low, "data:") || strings.HasPrefix(low, "cid:") {
-					return m
-				}
-				key := normalizeContentLocation(val)
-				if mxc, ok := locToMXC[key]; ok && mxc != "" {
-					return "src=" + open + mxc + close
-				}
-			}
-			return m
-		})
-	}
-	return out
 }
 
 // displayBodies returns the text and HTML bodies as the room should show

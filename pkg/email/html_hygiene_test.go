@@ -7,21 +7,21 @@ import (
 
 func TestIsLikelyDecorativeImage(t *testing.T) {
 	cases := []struct {
-		name string
-		im   *InlineImageMeta
-		want bool
+		name  string
+		label string
+		size  int64
+		want  bool
 	}{
-		{"nil", nil, true},
-		{"tiny gif", &InlineImageMeta{Size: 512, Label: "logo.gif"}, true},
-		{"big photo", &InlineImageMeta{Size: 200 * 1024, Label: "photo.jpg"}, false},
-		{"spacer label", &InlineImageMeta{Size: 50 * 1024, Label: "spacer.png"}, true},
-		{"tracking label", &InlineImageMeta{Size: 50 * 1024, Label: "tracking-pixel.gif"}, true},
-		{"1x1 label", &InlineImageMeta{Size: 50 * 1024, Label: "img-1x1.gif"}, true},
-		{"normal screenshot", &InlineImageMeta{Size: 80 * 1024, Label: "screenshot.png"}, false},
+		{"tiny gif", "logo.gif", 512, true},
+		{"big photo", "photo.jpg", 200 * 1024, false},
+		{"spacer label", "spacer.png", 50 * 1024, true},
+		{"tracking label", "tracking-pixel.gif", 50 * 1024, true},
+		{"1x1 label", "img-1x1.gif", 50 * 1024, true},
+		{"normal screenshot", "screenshot.png", 80 * 1024, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := isLikelyDecorativeImage(c.im); got != c.want {
+			if got := isLikelyDecorativeImage(c.label, c.size); got != c.want {
 				t.Errorf("got %v, want %v", got, c.want)
 			}
 		})
@@ -76,67 +76,21 @@ func TestIsLikelyMarketingHTML(t *testing.T) {
 	}
 }
 
-func TestMaterializeBackgroundImages_CSS(t *testing.T) {
-	in := `<table><tr><td style="background-image: url(cid:hero); padding: 10px">Click here</td></tr></table>`
-	cidToMXC := map[string]string{"hero": "mxc://example.org/abc123"}
-	got := MaterializeBackgroundImages(in, cidToMXC, nil)
-	if !strings.Contains(got, `<img src="mxc://example.org/abc123"`) {
-		t.Errorf("img tag not injected: %q", got)
+func TestBackgroundImageCIDs(t *testing.T) {
+	cases := []struct {
+		name, in string
+		want     []string
+	}{
+		{"css", `<table><tr><td style="background-image: url(cid:Hero); padding: 10px">Click here</td></tr></table>`, []string{"hero"}},
+		{"outlook attribute", `<table background="cid:bgimg"><tr><td>Hello</td></tr></table>`, []string{"bgimg"}},
+		{"remote background", `<td style="background-image: url(https://example.com/bg.png)">x</td>`, nil},
+		{"plain html", `<p>Hello, <strong>world</strong>!</p>`, nil},
 	}
-	// Original style is preserved (Matrix sanitizer will strip it; we keep
-	// for fidelity in saved-HTML attachments).
-	if !strings.Contains(got, "background-image") {
-		t.Errorf("original style stripped unexpectedly: %q", got)
-	}
-}
-
-func TestMaterializeBackgroundImages_OutlookAttr(t *testing.T) {
-	in := `<table background="cid:bgimg"><tr><td>Hello</td></tr></table>`
-	cidToMXC := map[string]string{"bgimg": "mxc://example.org/xyz789"}
-	got := MaterializeBackgroundImages(in, cidToMXC, nil)
-	if !strings.Contains(got, `<img src="mxc://example.org/xyz789"`) {
-		t.Errorf("img tag not injected for background= attr: %q", got)
-	}
-}
-
-func TestMaterializeBackgroundImages_UploadFallback(t *testing.T) {
-	in := `<td style="background-image: url(cid:newcid)">x</td>`
-	cidToMXC := map[string]string{}
-	called := false
-	uploader := func(cid string) (string, string) {
-		called = true
-		if cid != "newcid" {
-			t.Errorf("uploader got cid %q, want newcid", cid)
-		}
-		return "mxc://example.org/uploaded", "image/png"
-	}
-	got := MaterializeBackgroundImages(in, cidToMXC, uploader)
-	if !called {
-		t.Errorf("uploader was not invoked")
-	}
-	if !strings.Contains(got, "mxc://example.org/uploaded") {
-		t.Errorf("uploaded mxc not injected: %q", got)
-	}
-	if cidToMXC["newcid"] != "mxc://example.org/uploaded" {
-		t.Errorf("cidToMXC not updated; got %v", cidToMXC)
-	}
-}
-
-func TestMaterializeBackgroundImages_UnknownCID(t *testing.T) {
-	in := `<td style="background-image: url(cid:missing)">x</td>`
-	cidToMXC := map[string]string{}
-	uploader := func(cid string) (string, string) { return "", "" }
-	got := MaterializeBackgroundImages(in, cidToMXC, uploader)
-	// Unchanged — no mxc available, nothing to inject.
-	if strings.Contains(got, "<img") {
-		t.Errorf("img injected despite uploader returning empty: %q", got)
-	}
-}
-
-func TestMaterializeBackgroundImages_NoOpOnPlainHTML(t *testing.T) {
-	in := `<p>Hello, <strong>world</strong>!</p>`
-	got := MaterializeBackgroundImages(in, map[string]string{}, nil)
-	if got != in {
-		t.Errorf("plain HTML modified: in=%q out=%q", in, got)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := backgroundImageCIDs(c.in); strings.Join(got, ",") != strings.Join(c.want, ",") {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
 	}
 }

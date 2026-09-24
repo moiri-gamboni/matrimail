@@ -1,6 +1,7 @@
 package email
 
 import (
+	"context"
 	"net/mail"
 	"regexp"
 	"strings"
@@ -20,6 +21,10 @@ type EmailAttachment struct {
 	ContentLocation string // as in MIME header, normalized path-like string
 	Disposition     string // inline or attachment
 	IsInline        bool   // derived: Disposition == inline or referenced in HTML
+
+	// load fetches Data when the bytes were not delivered with the message
+	// (a Gmail attachment behind users.messages.attachments.get).
+	load func(context.Context) ([]byte, error)
 }
 
 // EmailThread represents an email conversation thread

@@ -325,7 +325,7 @@ func TestConvertMessage_ESPNewsletterIsReadable(t *testing.T) {
 		},
 		processor: NewProcessor(&log, nil, false, ""),
 	}
-	cm, err := ev.ConvertMessage(context.Background(), nil, nil)
+	cm, err := ev.ConvertMessage(context.Background(), testPortal(testRoom), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func TestConvertMessage_UntidyableHTMLSentAsWritten(t *testing.T) {
 		},
 		processor: NewProcessor(&log, nil, false, ""),
 	}
-	cm, err := ev.ConvertMessage(context.Background(), nil, nil)
+	cm, err := ev.ConvertMessage(context.Background(), testPortal(testRoom), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

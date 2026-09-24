@@ -36,7 +36,7 @@ The bridgev2 portal/message DB schema uses `NetworkID = "email"` for both old an
 - Implemented in Go using the mautrix bridgev2 framework
 - One email thread maps to one Matrix room
 - Participants (To/CC/BCC) are represented as Matrix ghost users
-- Attachments are uploaded to the homeserver media repo
+- Attachments and images are uploaded to the homeserver media repo, encrypted for the room when the room is encrypted
 
 ## Quick start
 
@@ -273,7 +273,10 @@ Most major email providers require you to generate a special "App Password" inst
 2. **Real-time delivery via IMAP IDLE.** No polling delays.
 3. **Participants come from To/CC/BCC.** Each appears as a ghost user.
 4. **Threading uses Message-ID, References, and In-Reply-To.** Standard RFC 5322.
-5. **Attachments are uploaded to Matrix media.** PDFs, images, documents.
+5. **Attachments are uploaded to Matrix media.** PDFs, images, documents, each as its own event. In an encrypted room the file is encrypted before upload, so the media repository holds only ciphertext; nothing is uploaded when the bridge has no room to encrypt for.
+   - Images shown inside an email (pasted screenshots, `cid:` and `data:` images, `cid:` backgrounds) follow the text as separate image events, numbered in the order the email shows them. In the formatted text each image becomes `[Image N: <alt text or file name>]`.
+   - Remote (`http`/`https`) images are removed and never fetched. Small inline images (under 16 KiB, or with a file name like a spacer or tracking pixel) are not sent; the text shows `[Image not shown: <alt text or file name>]` in their place.
+   - A file over `email_processing.max_upload_bytes` (default 25 MiB), or one whose download or upload fails, is replaced by a notice: `📎 not bridged: <name> (<type>, <size>): <reason>`.
 6. **Participant changes are posted as notices.** CC changes, new recipients.
 
 **Sent folder behavior:** replies you send from other email clients (Gmail web, a phone app) reach Matrix through your Sent mail. IMAP accounts watch a Sent folder chosen from the provider (`[Gmail]/Sent Mail` for gmail.com, `Sent Items` for Outlook, otherwise `Sent`) over its own IMAP IDLE connection. Gmail accounts in the default `modify` mode watch it only when the `SENT` label is among the labels selected at login.

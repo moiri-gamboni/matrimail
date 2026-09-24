@@ -1,40 +1,36 @@
 package email
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 )
 
 // DecorativeImageMaxBytes is the size below which an inline image is
 // considered decorative (tracking pixel, signature logo, separator graphic,
-// social-icon button). Anything below this threshold is skipped when
-// emitting m.image sidecars — broken-image cards from these tiny assets are
-// noisier than they are useful. Real photos and screenshots are typically
-// well above this size.
+// social-icon button) and not sent to the room: an image event for each of
+// these tiny assets is noisier than it is useful. Real photos and
+// screenshots are typically well above this size.
 const DecorativeImageMaxBytes = 16 * 1024
 
-// isLikelyDecorativeImage returns true when the inline image is too small
-// to be content-bearing or matches a label pattern (tracking-pixel,
-// transparent-spacer) we want to suppress from sidecar emission.
-func isLikelyDecorativeImage(im *InlineImageMeta) bool {
-	if im == nil {
+// isLikelyDecorativeImage returns true when an inline image is too small
+// to be content-bearing or its file name matches a tracking-pixel or spacer
+// pattern. Alt text is not consulted: it describes content ("package
+// tracking screenshot") as often as decoration.
+func isLikelyDecorativeImage(filename string, size int64) bool {
+	if size > 0 && size < DecorativeImageMaxBytes {
 		return true
 	}
-	if im.Size > 0 && im.Size < DecorativeImageMaxBytes {
-		return true
-	}
-	label := strings.ToLower(im.Label)
+	filename = strings.ToLower(filename)
 	for _, marker := range decorativeLabelMarkers {
-		if strings.Contains(label, marker) {
+		if strings.Contains(filename, marker) {
 			return true
 		}
 	}
 	return false
 }
 
-// decorativeLabelMarkers are substrings commonly found in filenames /
-// alt-text of tracking pixels and structural graphics that we don't want to
+// decorativeLabelMarkers are substrings commonly found in the file names of
+// tracking pixels and structural graphics that we don't want to
 // expose as standalone Matrix events.
 var decorativeLabelMarkers = []string{
 	"spacer",
@@ -92,80 +88,31 @@ func IsLikelyMarketingHTML(html, plainText string) bool {
 }
 
 // reBackgroundImageCSS matches an opening tag carrying an inline
-// `style="...background-image: url(cid:XXX)..."` declaration. The cid is
-// captured (group 3) so the caller can map it to an mxc URL.
-//
-// Tag name match list intentionally narrow — Matrix sanitizes <script>,
-// <iframe>, etc., and arbitrary background-image on those wouldn't survive
-// anyway. Adding tags here is cheap if a real email needs it.
+// `style="...background-image: url(cid:XXX)..."` declaration; the cid is
+// group 3.
 var reBackgroundImageCSS = regexp.MustCompile(
 	`(?is)<(td|table|div|tr|th|p|a|span|section|article)\b([^>]*?\bstyle\s*=\s*['"][^'"]*background-image\s*:\s*url\(\s*['"]?cid:([^)\s'"]+)['"]?\s*\)[^'"]*['"][^>]*)>`,
 )
 
 // reBackgroundAttr matches Outlook-style `<table background="cid:XXX">` or
-// `<td background="cid:XXX">`. cid captured at group 3.
+// `<td background="cid:XXX">`; the cid is group 3.
 var reBackgroundAttr = regexp.MustCompile(
 	`(?is)<(td|table|tr|th|div)\b([^>]*?\bbackground\s*=\s*['"]cid:([^'"\s>]+)['"][^>]*)>`,
 )
 
-// MaterializeBackgroundImages finds elements that reference an inline image
-// only through CSS `background-image: url(cid:...)` or the legacy
-// `background="cid:..."` attribute, and injects an `<img src="mxc://...">`
-// immediately after the opening tag so Matrix's HTML sanitizer (which
-// strips style and unknown attributes) still renders the image.
-//
-// uploadByCID is invoked for any cid that is not already present in
-// cidToMXC; implementations should locate the attachment, upload it via
-// `intent.UploadMedia`, mark it as inline-used, and return the mxc URL and
-// the resolved mime type. Returning ("", "") from uploadByCID is treated as
-// "image unavailable" — the tag is then left alone (Matrix will simply not
-// show a background, which is what would have happened anyway).
-//
-// The original `style` / `background` attribute is left in place. Matrix
-// will strip it on rendering, but downstream consumers (mail client
-// archives, the saved-HTML attachment) keep it for fidelity.
-func MaterializeBackgroundImages(
-	htmlIn string,
-	cidToMXC map[string]string,
-	uploadByCID func(cid string) (mxc string, mime string),
-) string {
-	if htmlIn == "" {
-		return htmlIn
+// backgroundImageCIDs returns, normalised, the cids of
+// inline images an element shows only through CSS `background-image:
+// url(cid:...)` or the legacy `background="cid:..."` attribute. The client's
+// sanitizer strips both, so without sending these images separately a
+// reader would never see them.
+func backgroundImageCIDs(htmlIn string) []string {
+	var cids []string
+	for _, re := range []*regexp.Regexp{reBackgroundImageCSS, reBackgroundAttr} {
+		for _, m := range re.FindAllStringSubmatch(htmlIn, -1) {
+			cids = append(cids, normalizeCIDRef(m[3]))
+		}
 	}
-
-	inject := func(tagWithBracket, cidRef string) string {
-		cid := normalizeCIDRef(cidRef)
-		mxc := cidToMXC[cid]
-		if mxc == "" && uploadByCID != nil {
-			if got, _ := uploadByCID(cid); got != "" {
-				cidToMXC[cid] = got
-				mxc = got
-			}
-		}
-		if mxc == "" {
-			return tagWithBracket
-		}
-		// Inject the <img> right after the matched opening tag. The alt
-		// text gives Matrix something to render in the text-only fallback
-		// when the mxc fails.
-		return tagWithBracket + fmt.Sprintf(`<img src="%s" alt="" style="max-width:100%%">`, mxc)
-	}
-
-	out := reBackgroundImageCSS.ReplaceAllStringFunc(htmlIn, func(m string) string {
-		subs := reBackgroundImageCSS.FindStringSubmatch(m)
-		if len(subs) < 4 {
-			return m
-		}
-		return inject(m, subs[3])
-	})
-	out = reBackgroundAttr.ReplaceAllStringFunc(out, func(m string) string {
-		subs := reBackgroundAttr.FindStringSubmatch(m)
-		if len(subs) < 4 {
-			return m
-		}
-		return inject(m, subs[3])
-	})
-	return out
+	return cids
 }
 
 // reEmptyProtonSignature matches one Proton Mail signature element marked
