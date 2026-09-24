@@ -275,7 +275,12 @@ Most major email providers require you to generate a special "App Password" inst
 5. **Attachments are uploaded to Matrix media.** PDFs, images, documents.
 6. **Participant changes are posted as notices.** CC changes, new recipients.
 
-**Sent folder behavior:** matrimail monitors your Sent folder via IMAP IDLE to capture replies you send from other email clients (Gmail web, phone app, etc.). When matrimail itself sends an outbound email, it records the Message-ID in a dedup table and short-circuits the inbound IMAP echo so you only see one copy in Matrix.
+**Sent folder behavior:** replies you send from other email clients (Gmail web, a phone app) reach Matrix through your Sent mail. IMAP accounts watch a Sent folder chosen from the provider (`[Gmail]/Sent Mail` for gmail.com, `Sent Items` for Outlook, otherwise `Sent`) over its own IMAP IDLE connection. Gmail accounts in the default `modify` mode watch it only when the `SENT` label is among the labels selected at login.
+
+- A message is treated as yours when it is found in a Sent folder or under the `SENT` label, or when its From is your account's address or one of its Gmail send-as aliases, wherever it was found.
+- Your messages appear in their thread's room as sent by you. They never become the message a reply answers: a reply typed in Matrix, including one after `!matrimail reply-only`, is addressed from the thread's last message sent by someone else. In a thread you started that nobody has answered yet, a reply goes to the thread's other participants and `reply-only` has no one to answer.
+- A message under both INBOX and `SENT` (mail to yourself) is bridged once.
+- When matrimail itself sends an email, it records the Message-ID in a dedup table and skips that message when it reappears in Sent, so you only see one copy in Matrix.
 
 ## Folder Selection
 
