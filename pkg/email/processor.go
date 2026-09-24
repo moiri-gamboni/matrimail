@@ -1325,10 +1325,7 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 	// Add HTML formatting if available
 	if origHTML != "" && origHTML != e.emailMessage.TextContent {
 		content.Format = event.FormatHTML
-		// Decode HTML entities in the formatted body before sending to Matrix
-		content.FormattedBody = html.UnescapeString(origHTML)
-		// Filter out invisible Unicode characters from HTML content too
-		content.FormattedBody = filterInvisibleUnicode(content.FormattedBody)
+		content.FormattedBody = matrixFormattedBody(origHTML)
 	}
 
 	// Ensure body isn't empty - if we have HTML but no text, try to extract from HTML
@@ -2086,6 +2083,25 @@ func simpleHTMLToText(s string) string {
 	// Collapse whitespace
 	s = strings.TrimSpace(collapseWhitespace(s))
 	return s
+}
+
+// reHTMLEntity matches one named or numeric character reference.
+var reHTMLEntity = regexp.MustCompile(`&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);`)
+
+// matrixFormattedBody prepares an email's HTML for formatted_body. The HTML is
+// already correctly escaped, so entities stay as written: decoding them would
+// turn escaped text such as "&lt;alex@example.com&gt;" into markup the
+// client's sanitizer drops. Invisible characters (the padding marketing mail
+// puts after its preview text) are removed whether written literally or as
+// an entity such as &zwnj; or &#847;.
+func matrixFormattedBody(htmlBody string) string {
+	htmlBody = reHTMLEntity.ReplaceAllStringFunc(htmlBody, func(ref string) string {
+		if filterInvisibleUnicode(html.UnescapeString(ref)) == "" {
+			return ""
+		}
+		return ref
+	})
+	return filterInvisibleUnicode(htmlBody)
 }
 
 // filterInvisibleUnicode removes invisible Unicode characters in a single pass
