@@ -1,0 +1,295 @@
+{
+ "id": "18c0e0a1b2c3d4e5",
+ "threadId": "18c0e0a1b2c3d4e5",
+ "labelIds": [
+  "INBOX",
+  "UNREAD"
+ ],
+ "snippet": "See the screenshot below. Report attached.",
+ "historyId": "123456",
+ "internalDate": "1726000000000",
+ "sizeEstimate": 30090000,
+ "payload": {
+  "partId": "",
+  "mimeType": "multipart/mixed",
+  "filename": "",
+  "headers": [
+   {
+    "name": "From",
+    "value": "Alex Example <alex@example.com>"
+   },
+   {
+    "name": "To",
+    "value": "sam@example.com"
+   },
+   {
+    "name": "Subject",
+    "value": "Screenshot and report"
+   },
+   {
+    "name": "Message-ID",
+    "value": "<CAexample0001@mail.example.com>"
+   },
+   {
+    "name": "Date",
+    "value": "Tue, 10 Sep 2024 20:26:40 +0000"
+   },
+   {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"000000000000aaaa\""
+   }
+  ],
+  "body": {
+   "size": 0
+  },
+  "parts": [
+   {
+    "partId": "0",
+    "mimeType": "multipart/related",
+    "filename": "",
+    "headers": [
+     {
+      "name": "Content-Type",
+      "value": "multipart/related; boundary=\"000000000000bbbb\""
+     }
+    ],
+    "body": {
+     "size": 0
+    },
+    "parts": [
+     {
+      "partId": "0.0",
+      "mimeType": "multipart/alternative",
+      "filename": "",
+      "headers": [
+       {
+        "name": "Content-Type",
+        "value": "multipart/alternative; boundary=\"000000000000cccc\""
+       }
+      ],
+      "body": {
+       "size": 0
+      },
+      "parts": [
+       {
+        "partId": "0.0.0",
+        "mimeType": "text/plain",
+        "filename": "",
+        "headers": [
+         {
+          "name": "Content-Type",
+          "value": "text/plain; charset=\"UTF-8\""
+         }
+        ],
+        "body": {
+         "size": 64,
+         "data": "U2VlIHRoZSBzY3JlZW5zaG90IGJlbG93LgoKW2ltYWdlOiBpbWFnZS5wbmddCgpSZXBvcnQgYXR0YWNoZWQuCg"
+        }
+       },
+       {
+        "partId": "0.0.1",
+        "mimeType": "text/html",
+        "filename": "",
+        "headers": [
+         {
+          "name": "Content-Type",
+          "value": "text/html; charset=\"UTF-8\""
+         },
+         {
+          "name": "Content-Transfer-Encoding",
+          "value": "quoted-printable"
+         }
+        ],
+        "body": {
+         "size": 219,
+         "data": "PGRpdiBkaXI9Imx0ciI-U2VlIHRoZSBzY3JlZW5zaG90IGJlbG93LjxkaXY-PGltZyBzcmM9ImNpZDppaV9tMWFiYyIgYWx0PSJpbWFnZS5wbmciIHdpZHRoPSI2MDAiPjxicj48L2Rpdj48ZGl2PjxpbWcgc3JjPSJjaWQ6aWlfbm9uYW1lIj48L2Rpdj48aW1nIHNyYz0iY2lkOnBpeGVsMSIgd2lkdGg9IjEiIGhlaWdodD0iMSI-PGRpdj5SZXBvcnQgYXR0YWNoZWQuPC9kaXY-PC9kaXY-"
+        }
+       }
+      ]
+     },
+     {
+      "partId": "0.1",
+      "mimeType": "image/png",
+      "filename": "image.png",
+      "headers": [
+       {
+        "name": "Content-Type",
+        "value": "image/png; name=\"image.png\""
+       },
+       {
+        "name": "Content-Disposition",
+        "value": "inline; filename=\"image.png\""
+       },
+       {
+        "name": "Content-Transfer-Encoding",
+        "value": "base64"
+       },
+       {
+        "name": "Content-ID",
+        "value": "<ii_m1abc>"
+       },
+       {
+        "name": "X-Attachment-Id",
+        "value": "ii_m1abc"
+       }
+      ],
+      "body": {
+       "attachmentId": "ANGjdJ_inline",
+       "size": 20480
+      }
+     },
+     {
+      "partId": "0.2",
+      "mimeType": "image/jpeg",
+      "filename": "",
+      "headers": [
+       {
+        "name": "Content-Type",
+        "value": "image/jpeg"
+       },
+       {
+        "name": "Content-Disposition",
+        "value": "inline"
+       },
+       {
+        "name": "Content-Transfer-Encoding",
+        "value": "base64"
+       },
+       {
+        "name": "Content-ID",
+        "value": "<ii_noname>"
+       }
+      ],
+      "body": {
+       "attachmentId": "ANGjdJ_noname",
+       "size": 40960
+      }
+     },
+     {
+      "partId": "0.3",
+      "mimeType": "image/gif",
+      "filename": "",
+      "headers": [
+       {
+        "name": "Content-Type",
+        "value": "image/gif"
+       },
+       {
+        "name": "Content-Disposition",
+        "value": "inline"
+       },
+       {
+        "name": "Content-Transfer-Encoding",
+        "value": "base64"
+       },
+       {
+        "name": "Content-ID",
+        "value": "<pixel1>"
+       }
+      ],
+      "body": {
+       "attachmentId": "ANGjdJ_pixel",
+       "size": 43
+      }
+     },
+     {
+      "partId": "0.4",
+      "mimeType": "image/png",
+      "filename": "",
+      "headers": [
+       {
+        "name": "Content-Type",
+        "value": "image/png"
+       },
+       {
+        "name": "Content-Transfer-Encoding",
+        "value": "base64"
+       },
+       {
+        "name": "Content-ID",
+        "value": "<unused1>"
+       }
+      ],
+      "body": {
+       "attachmentId": "ANGjdJ_unused",
+       "size": 30000
+      }
+     }
+    ]
+   },
+   {
+    "partId": "1",
+    "mimeType": "application/pdf",
+    "filename": "report.pdf",
+    "headers": [
+     {
+      "name": "Content-Type",
+      "value": "application/pdf; name=\"report.pdf\""
+     },
+     {
+      "name": "Content-Disposition",
+      "value": "attachment; filename=\"report.pdf\""
+     },
+     {
+      "name": "Content-Transfer-Encoding",
+      "value": "base64"
+     },
+     {
+      "name": "X-Attachment-Id",
+      "value": "f_m1abc"
+     }
+    ],
+    "body": {
+     "attachmentId": "ANGjdJ_pdf",
+     "size": 1234
+    }
+   },
+   {
+    "partId": "2",
+    "mimeType": "text/csv",
+    "filename": "small.csv",
+    "headers": [
+     {
+      "name": "Content-Type",
+      "value": "text/csv; name=\"small.csv\""
+     },
+     {
+      "name": "Content-Disposition",
+      "value": "attachment; filename=\"small.csv\""
+     },
+     {
+      "name": "Content-Transfer-Encoding",
+      "value": "base64"
+     }
+    ],
+    "body": {
+     "size": 8,
+     "data": "YSxiCjEsMgo"
+    }
+   },
+   {
+    "partId": "3",
+    "mimeType": "application/zip",
+    "filename": "huge.zip",
+    "headers": [
+     {
+      "name": "Content-Type",
+      "value": "application/zip; name=\"huge.zip\""
+     },
+     {
+      "name": "Content-Disposition",
+      "value": "attachment; filename=\"huge.zip\""
+     },
+     {
+      "name": "Content-Transfer-Encoding",
+      "value": "base64"
+     }
+    ],
+    "body": {
+     "attachmentId": "ANGjdJ_zip",
+     "size": 30000000
+    }
+   }
+  ]
+ }
+}

@@ -277,6 +277,7 @@ Most major email providers require you to generate a special "App Password" inst
    - Images shown inside an email (pasted screenshots, `cid:` and `data:` images, `cid:` backgrounds) follow the text as separate image events, numbered in the order the email shows them. In the formatted text each image becomes `[Image N: <alt text or file name>]`.
    - Remote (`http`/`https`) images are removed and never fetched. Small inline images (under 16 KiB, or with a file name like a spacer or tracking pixel) are not sent; the text shows `[Image not shown: <alt text or file name>]` in their place.
    - A file over `email_processing.max_upload_bytes` (default 25 MiB), or one whose download or upload fails, is replaced by a notice: `📎 not bridged: <name> (<type>, <size>): <reason>`.
+   - Gmail accounts in `modify` mode download attachment bytes with `users.messages.attachments.get` when the message is bridged, only for files under the upload limit and inline images the email shows.
 6. **Participant changes are posted as notices.** CC changes, new recipients.
 
 **Sent folder behavior:** replies you send from other email clients (Gmail web, a phone app) reach Matrix through your Sent mail. IMAP accounts watch a Sent folder chosen from the provider (`[Gmail]/Sent Mail` for gmail.com, `Sent Items` for Outlook, otherwise `Sent`) over its own IMAP IDLE connection. Gmail accounts in the default `modify` mode watch it only when the `SENT` label is among the labels selected at login.

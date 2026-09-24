@@ -64,6 +64,7 @@ func (m *GmailInboundManager) Start(ctx context.Context, login *bridgev2.UserLog
 
 	logger := m.connector.Bridge.Log.With().Str("component", "gmail_inbound").Str("email", emailAddr).Logger()
 	userMXID := login.UserMXID.String()
+	attachments := email.NewGmailAttachments(ts, &logger)
 
 	poller := &email.GmailHistoryPoller{
 		UserMXID:          userMXID,
@@ -77,7 +78,7 @@ func (m *GmailInboundManager) Start(ctx context.Context, login *bridgev2.UserLog
 			return m.connector.DB.SetGmailHistoryID(ctx, userMXID, emailAddr, historyID)
 		},
 		OnMessage: func(ctx context.Context, msg *gmail.Message, mailbox string) error {
-			return m.handleMessage(ctx, login, emailAddr, msg, mailbox)
+			return m.handleMessage(ctx, login, msg, mailbox, attachments.Fetch)
 		},
 		Log: &logger,
 	}
@@ -184,8 +185,8 @@ func (m *GmailInboundManager) StopAll() {
 //
 // Mirrors pkg/imap/client.go's post-process path: portal lookup → portal
 // creation if missing → ensure room → QueueRemoteEvent.
-func (m *GmailInboundManager) handleMessage(ctx context.Context, login *bridgev2.UserLogin, emailAddr string, msg *gmail.Message, mailbox string) error {
-	parsed, err := email.ParseGmailAPIMessage(msg)
+func (m *GmailInboundManager) handleMessage(ctx context.Context, login *bridgev2.UserLogin, msg *gmail.Message, mailbox string, fetch email.GmailAttachmentFetch) error {
+	parsed, err := email.ParseGmailAPIMessage(msg, fetch)
 	if err != nil {
 		return fmt.Errorf("parse gmail message %s: %w", msg.Id, err)
 	}

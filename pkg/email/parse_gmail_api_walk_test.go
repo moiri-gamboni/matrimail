@@ -23,7 +23,7 @@ func TestWalkGmailPayload_AttachmentWithNoBodyDoesNotPanic(t *testing.T) {
 		Parts: []*gmail.MessagePart{
 			{MimeType: "application/pdf", Filename: "report.pdf", Body: nil},
 		},
-	}, parsed, 0)
+	}, parsed, 0, nil)
 
 	if len(parsed.Attachments) != 1 {
 		t.Fatalf("got %d attachments, want 1", len(parsed.Attachments))
@@ -52,7 +52,7 @@ func TestWalkGmailPayload_ReadsBodyThroughOrdinaryNesting(t *testing.T) {
 				{MimeType: "text/html", Body: &gmail.MessagePartBody{Data: enc("<p>html body</p>")}},
 			},
 		}},
-	}, parsed, 0)
+	}, parsed, 0, nil)
 
 	if parsed.TextContent != "plain body" {
 		t.Errorf("TextContent = %q", parsed.TextContent)
@@ -77,7 +77,7 @@ func TestWalkGmailPayload_StopsAtTheDepthLimit(t *testing.T) {
 	}
 
 	parsed := &ParsedEmail{}
-	walkGmailPayload(part, parsed, 0)
+	walkGmailPayload(part, parsed, 0, nil)
 
 	if parsed.TextContent != "" {
 		t.Errorf("TextContent = %q; a body past the depth limit must not be reached", parsed.TextContent)
@@ -90,7 +90,7 @@ func TestWalkGmailPayload_StopsAtTheDepthLimit(t *testing.T) {
 		shallow = &gmail.MessagePart{MimeType: "multipart/mixed", Parts: []*gmail.MessagePart{shallow}}
 	}
 	within := &ParsedEmail{}
-	walkGmailPayload(shallow, within, 0)
+	walkGmailPayload(shallow, within, 0, nil)
 	if within.TextContent != "buried" {
 		t.Errorf("TextContent = %q; nesting within the limit must still be read", within.TextContent)
 	}
