@@ -194,10 +194,10 @@ var htmlQuoteMarkers = []string{
 //
 // We cut at the first occurrence of a known quote-container marker. Trailing
 // `<br>` runs and empty `<div>` spacers immediately preceding the cut are
-// trimmed so the visible reply doesn't end on a hanging blank line. We do NOT attempt to balance unclosed
-// tags — Matrix clients run the HTML through a sanitizer that handles
-// truncated fragments gracefully, and the alternative (full DOM parse + walk)
-// is significantly more code for marginal gain.
+// trimmed so the visible reply doesn't end on a hanging blank line. We do NOT
+// attempt to balance unclosed tags — Matrix clients run the HTML through a
+// sanitizer that handles truncated fragments gracefully, and the alternative
+// (full DOM parse + walk) is significantly more code for marginal gain.
 //
 // If no marker is found, the input is returned unchanged.
 func StripQuotedReplyHTML(htmlBody string) string {
@@ -214,48 +214,14 @@ func StripQuotedReplyHTML(htmlBody string) string {
 	if cut == len(htmlBody) {
 		return htmlBody
 	}
-	out := htmlBody[:cut]
-	// Strip trailing whitespace and any run of <br> tags (with attribute /
-	// self-closing variants) or empty divs, so the new reply body doesn't end
-	// on the "blank line between body and quote" filler (a bare <br> from
-	// Gmail, a <div><br></div> from Proton).
-	out = strings.TrimRight(out, " \t\r\n")
-	for {
-		trimmed := reTrailingEmptyDiv.ReplaceAllString(trimTrailingBR(out), "")
-		if trimmed == out {
-			break
-		}
-		out = strings.TrimRight(trimmed, " \t\r\n")
-	}
-	return out
+	return reTrailingFiller.ReplaceAllString(htmlBody[:cut], "")
 }
 
-// reTrailingEmptyDiv matches a div at the end of the input holding nothing but
-// whitespace and <br>.
-var reTrailingEmptyDiv = regexp.MustCompile(`(?is)<div\b[^>]*>(?:\s|<br\s*/?>)*</div>$`)
-
-// trimTrailingBR removes a single trailing <br>, <br/>, or <br ...> token
-// (case-insensitive) from the end of s if present.
-func trimTrailingBR(s string) string {
-	if s == "" {
-		return s
-	}
-	if s[len(s)-1] != '>' {
-		return s
-	}
-	// Search backwards for the matching '<'. Stop at the closest one.
-	lt := strings.LastIndexByte(s, '<')
-	if lt < 0 {
-		return s
-	}
-	tag := strings.ToLower(strings.TrimSpace(s[lt+1 : len(s)-1]))
-	tag = strings.TrimSuffix(tag, "/")
-	tag = strings.TrimSpace(tag)
-	if tag == "br" || strings.HasPrefix(tag, "br ") {
-		return s[:lt]
-	}
-	return s
-}
+// reTrailingFiller matches the run of whitespace, <br> tags and empty <div>
+// spacers at the end of the input: the blank lines a client leaves between
+// the new text and its quote (a bare <br> from Gmail, a <div><br></div> from
+// Proton). One anchored match keeps the cost linear in the body size.
+var reTrailingFiller = regexp.MustCompile(`(?is)(?:\s|<br\b[^>]*>|<div\b[^>]*>(?:\s|<br\b[^>]*>)*</div>)+$`)
 
 // FormatGmailQuoteText returns a Gmail-style plain-text quote block to be
 // appended to a reply body. Layout:

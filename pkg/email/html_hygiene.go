@@ -178,15 +178,11 @@ var reEmptyProtonSignature = regexp.MustCompile(
 )
 
 // stripEmptyProtonSignature removes Proton Mail's empty signature elements.
-// The container only counts as empty once its empty children are gone, so
-// the match is repeated until nothing changes; a signature with content
-// keeps its container and loses only the empty sibling.
+// Proton nests them two deep, a container around the user and Proton
+// signatures, and the container only matches once its empty children are
+// gone: so children first, then the container they emptied. A signature with
+// content keeps its container and loses only the empty sibling.
 func stripEmptyProtonSignature(htmlBody string) string {
-	for {
-		next := reEmptyProtonSignature.ReplaceAllString(htmlBody, "")
-		if next == htmlBody {
-			return htmlBody
-		}
-		htmlBody = next
-	}
+	htmlBody = reEmptyProtonSignature.ReplaceAllString(htmlBody, "")
+	return reEmptyProtonSignature.ReplaceAllString(htmlBody, "")
 }
