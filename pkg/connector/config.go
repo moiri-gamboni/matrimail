@@ -18,6 +18,9 @@ type Config struct {
 	// GmailOAuth holds the user-provided "Desktop app" OAuth 2.0 client
 	// credentials used for the device-code login flow on Gmail accounts.
 	GmailOAuth GmailOAuthConfig `yaml:"gmail_oauth"`
+	// BeeperSync mirrors archived and read state between Gmail threads and
+	// their chats in Beeper. Off unless APIURL is set.
+	BeeperSync BeeperSyncConfig `yaml:"beeper_sync"`
 	// DraftWebhook configures the optional external trigger used by the
 	// `!matrimail draft` command (and the reaction trigger, once enabled) to
 	// ask an out-of-process workflow — typically an n8n LLM-draft flow — to
@@ -165,6 +168,11 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Str, "gmail_oauth", "listener_address")
 	helper.Copy(up.Str, "gmail_oauth", "default_scope_mode")
 	helper.Copy(up.Int, "gmail_oauth", "callback_timeout_seconds")
+
+	// Beeper state sync (optional; off while api_url is empty).
+	helper.Copy(up.Str, "beeper_sync", "api_url")
+	helper.Copy(up.Str, "beeper_sync", "token_file")
+	helper.Copy(up.Int, "beeper_sync", "interval_seconds")
 
 	// Draft webhook (optional external trigger for !matrimail draft).
 	helper.Copy(up.Str, "draft_webhook", "url")

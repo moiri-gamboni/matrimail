@@ -3,12 +3,15 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
+	"time"
 
 	"golang.org/x/oauth2"
 	gmail "google.golang.org/api/gmail/v1"
 	"maunium.net/go/mautrix/bridgev2"
 
+	"github.com/Leicas/matrimail/pkg/beeper"
 	"github.com/Leicas/matrimail/pkg/email"
 )
 
@@ -82,9 +85,26 @@ func (m *GmailInboundManager) Start(ctx context.Context, login *bridgev2.UserLog
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	m.runners[key] = &gmailRunner{cancel: cancel, poller: poller}
 
+	if cfg := m.connector.Config.BeeperSync; cfg.APIURL != "" {
+		syncLog := m.connector.Bridge.Log.With().Str("component", "beeper_sync").Str("email", emailAddr).Logger()
+		syncer := &beeperSyncer{
+			loginID:       string(login.ID),
+			beeper:        &beeper.Client{BaseURL: cfg.APIURL, TokenFile: cfg.TokenFile, HTTP: &http.Client{Timeout: 30 * time.Second}, Log: &syncLog},
+			gmail:         email.NewGmailThreads(ts, &syncLog),
+			store:         m.connector.BeeperSync,
+			threadForChat: gmailThreadForChat(m.connector.Bridge.DB, string(login.ID)),
+			log:           &syncLog,
+		}
+		poller.OnThreadsChanged = syncer.gmailThreadsChanged
+		go syncer.run(runnerCtx, cfg.Interval())
+	}
+
 	go func() {
 		if err := poller.Run(runnerCtx); err != nil && runnerCtx.Err() == nil {
 			logger.Error().Err(err).Msg("Gmail history poller exited with error")
+			// Stops the Beeper state sync too, which without the poller would
+			// no longer hear of changes made in Gmail.
+			cancel()
 			// Surface to the user via the management room — they won't see
 			// inbound mail until the bridge is restarted or the account is
 			// re-loaded. Best-effort: a delivery failure is non-critical (the

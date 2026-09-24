@@ -29,6 +29,7 @@ The bridgev2 portal/message DB schema uses `NetworkID = "email"` for both old an
 - **Cleans up messy emails:** Filters out tracking pixels and tiny placeholder images that clutter your conversations
 - **Secure storage:** Your email credentials are encrypted on your machine
 - **Reply or compose new threads from Matrix:** Send a message in a thread room to reply, or use `!matrimail compose to:foo@bar.com` to start a new email thread.
+- **Archive and read sync with Beeper (optional):** Archive or read a thread in Beeper and it is archived or read in Gmail, and the reverse. See [Archive and read sync with Beeper](#archive-and-read-sync-with-beeper).
 
 ## Architecture
 
@@ -281,6 +282,54 @@ Most major email providers require you to generate a special "App Password" inst
 - Your messages appear in their thread's room as sent by you. They never become the message a reply answers: a reply typed in Matrix, including one after `!matrimail reply-only`, is addressed from the thread's last message sent by someone else. In a thread you started that nobody has answered yet, a reply goes to the thread's other participants and `reply-only` has no one to answer.
 - A message under both INBOX and `SENT` (mail to yourself) is bridged once.
 - When matrimail itself sends an email, it records the Message-ID in a dedup table and skips that message when it reappears in Sent, so you only see one copy in Matrix.
+
+## Archive and read sync with Beeper
+
+For Gmail accounts connected with OAuth in the default `modify` mode, matrimail can keep a thread's archived and read state the same in Gmail and in its Beeper chat. Beeper does not tell a bridge when a chat is archived or read, so this needs the Beeper Desktop API, served by Beeper Server (headless Beeper Desktop) or Beeper Desktop running on the bridge's host. It is off unless configured.
+
+### What syncs
+
+| In Beeper | In Gmail |
+|---|---|
+| Archive the chat | Archive the thread (INBOX removed from its messages) |
+| Unarchive the chat | Move the thread to the inbox (INBOX added to its messages) |
+| Read the chat | Mark the thread read (UNREAD removed from its messages) |
+| Mark the chat unread | Mark the thread's newest message unread |
+
+The reverse holds too: archiving, moving to the inbox, reading or marking unread a thread in Gmail does the same to its chat. New mail in an archived thread puts it back in the Gmail inbox, and its chat comes out of the Beeper archive.
+
+- Beeper-side changes are picked up every `interval_seconds` (default 60). Gmail-side changes are seen by the Gmail poller (every 30 seconds) and applied to Beeper on the next sync.
+- A thread's first sync copies Gmail's state to Beeper. Chats created by a large import therefore end up archived and read wherever the mail is archived and read in Gmail, rather than all unread in the Beeper inbox.
+- A thread that was only ever sent from, never received, has no message in the Gmail inbox, so its chat is archived on its first sync.
+- A compose room is synced once its first message has been sent and Gmail has assigned the thread.
+- If Beeper Server is unreachable or refuses the token, the bridge logs one warning, keeps bridging mail, retries every interval, and logs again when the sync recovers.
+
+### How to turn it on
+
+1. Get an access token for the Beeper Desktop API of the Beeper Server (or Beeper Desktop) on the bridge's host, and save it to a file only the bridge's user can read.
+2. Add the `beeper_sync` block to the `network:` section of the bridge's config:
+
+   ```yaml
+   network:
+       beeper_sync:
+           api_url: http://127.0.0.1:23373
+           token_file: /path/to/beeper-token
+           interval_seconds: 60
+   ```
+
+3. Restart the bridge. If the token file cannot be read, the bridge stops at startup with an error naming `network.beeper_sync.token_file`.
+
+To rotate the token, replace the file's contents; the bridge reads it on every call. To turn the sync off, set `api_url` to `""` and restart.
+
+### Configuration
+
+| Key | Default | Meaning |
+|---|---|---|
+| `network.beeper_sync.api_url` | `""` | Base URL of the Beeper Desktop API. Empty turns the sync off. |
+| `network.beeper_sync.token_file` | `""` | File holding the API's bearer token. Required when `api_url` is set. |
+| `network.beeper_sync.interval_seconds` | `60` | How often Beeper is checked for changes. |
+
+The bridge keeps each thread's last synced state in the `matrimail_beeper_sync` table of its database.
 
 ## Folder Selection
 
