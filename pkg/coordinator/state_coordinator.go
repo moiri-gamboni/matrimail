@@ -40,6 +40,9 @@ const (
 	EventIdleStarted          EventType = "idle_started"
 	EventIdleFailed           EventType = "idle_failed"
 	EventIdleRecovered        EventType = "idle_recovered"
+	// A polling transport (the Gmail API poller) is connected and receiving
+	// as soon as its poller runs, so it reports both at once.
+	EventPollerReady          EventType = "poller_ready"
 	
 	// Circuit breaker events
 	EventCircuitOpened        EventType = "circuit_opened"
@@ -144,6 +147,10 @@ func (sc *StateCoordinator) updateComponentState(event ConnectionEvent) {
 			sc.inbox.IdleRunning = false
 			sc.inbox.FailureCount++
 		case EventIdleRecovered:
+			sc.inbox.IdleRunning = true
+			sc.inbox.FailureCount = 0
+		case EventPollerReady:
+			sc.inbox.Connected = true
 			sc.inbox.IdleRunning = true
 			sc.inbox.FailureCount = 0
 		}

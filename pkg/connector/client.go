@@ -557,15 +557,15 @@ func (ec *EmailClient) Connect(ctx context.Context) {
 			// Modify-scope Gmail OAuth: inbound is served by the Gmail-API
 			// history poller (its own goroutine, started in
 			// startGmailInboundIfApplicable). There's no IMAP socket to keep
-			// open, so report both connection_established and idle_started so
-			// the coordinator's "Connected && IdleRunning => StateConnected"
-			// rule is satisfied (the poller's ticker is the moral equivalent
-			// of IMAP IDLE for this transport). Subsequent transient failures
+			// open, so one poller_ready event sets both halves of the
+			// coordinator's "Connected && IdleRunning => StateConnected" rule
+			// (the poller's ticker is the moral equivalent of IMAP IDLE for this
+			// transport). Two separate events would compute and send
+			// TRANSIENT_DISCONNECT in between. Subsequent transient failures
 			// inside the poller don't currently flow back to the coordinator —
 			// token revocation flips the account to needs-reauth via
 			// reauthAwareTokenSource which fires its own bridge state.
-			ec.stateCoordinator.ReportSimpleEvent("inbox", "connection_established", true, "", nil)
-			ec.stateCoordinator.ReportSimpleEvent("inbox", "idle_started", true, "", nil)
+			ec.stateCoordinator.ReportSimpleEvent("inbox", string(coordinator.EventPollerReady), true, "", nil)
 			return
 		}
 		ec.stateCoordinator.ReportSimpleEvent("inbox", "auth_failure", false, EmailNotLoggedIn, nil)
