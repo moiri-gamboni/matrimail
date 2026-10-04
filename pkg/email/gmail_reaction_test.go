@@ -128,7 +128,7 @@ func TestGmailReactionSendsOnceInTargetThread(t *testing.T) {
 			if r.URL.Query().Get("format") != "metadata" {
 				t.Error("target fetched without metadata format")
 			}
-			for _, name := range []string{"To", "Cc", "Reply-To", "List-Id", "From", "Message-ID"} {
+			for _, name := range []string{"To", "Cc", "Reply-To", "List-Id", "From", "Message-ID", "References"} {
 				if !slices.Contains(r.URL.Query()["metadataHeaders"], name) {
 					t.Errorf("missing requested header %s", name)
 				}
@@ -170,5 +170,46 @@ func TestGmailReactionSendsOnceInTargetThread(t *testing.T) {
 	mid, err := sendGmailReaction(context.Background(), svc, target.ThreadId, cleanMessageID(headerValue(target.Payload.Headers, "Message-ID")), "sam@example.com", "✅")
 	if err != nil || mid != "reaction@example.com" || sends != 1 {
 		t.Fatalf("mid=%q sends=%d err=%v", mid, sends, err)
+	}
+}
+
+func TestGmailReactionEncodesHeadersAndPreservesReferences(t *testing.T) {
+	target := reactionTarget(t)
+	for _, h := range target.Payload.Headers {
+		switch h.Name {
+		case "Subject":
+			h.Value = "Réunion à Zürich"
+		case "From":
+			h.Value = "Élise <elise@example.com>"
+		}
+	}
+	target.Payload.Headers = append(target.Payload.Headers, &gmail.MessagePartHeader{Name: "References", Value: "<root@example.com> <parent@example.com>"})
+	raw, err := BuildGmailReaction(target, "sam@example.com", "✅")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "<root@example.com> <parent@example.com> <" + cleanMessageID(headerValue(target.Payload.Headers, "Message-ID")) + ">"
+	if msg.Header.Get("References") != want {
+		t.Errorf("references=%q want=%q", msg.Header.Get("References"), want)
+	}
+	subject, err := (&mime.WordDecoder{}).DecodeHeader(msg.Header.Get("Subject"))
+	if err != nil || subject != "Réunion à Zürich" {
+		t.Fatalf("subject=%q err=%v", subject, err)
+	}
+	for _, name := range []string{"Subject", "From", "To"} {
+		for _, r := range msg.Header.Get(name) {
+			if r > 127 {
+				t.Errorf("%s contains unencoded non-ASCII", name)
+				break
+			}
+		}
+	}
+	addresses, err := msg.Header.AddressList("To")
+	if err != nil || len(addresses) != 1 || addresses[0].Name != "Élise" || addresses[0].Address != "elise@example.com" {
+		t.Fatalf("to=%v err=%v", addresses, err)
 	}
 }

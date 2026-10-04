@@ -27,7 +27,7 @@ func sendGmailReaction(ctx context.Context, svc *gmail.Service, threadID, messag
 	if threadID == "" || messageID == "" {
 		return "", errors.New("reaction target has no Gmail thread or Message-ID")
 	}
-	thread, err := svc.Users.Threads.Get("me", threadID).Format("metadata").MetadataHeaders("Message-ID", "From", "To", "Cc", "Reply-To", "List-Id", "Subject").Context(ctx).Do()
+	thread, err := svc.Users.Threads.Get("me", threadID).Format("metadata").MetadataHeaders("Message-ID", "From", "To", "Cc", "Reply-To", "List-Id", "Subject", "References").Context(ctx).Do()
 	if err != nil {
 		return "", fmt.Errorf("fetch reaction target: %w", err)
 	}

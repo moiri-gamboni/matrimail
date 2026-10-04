@@ -12,6 +12,8 @@ import (
 	"net/textproto"
 	"strings"
 
+	gomail "github.com/emersion/go-message/mail"
+	msgtextproto "github.com/emersion/go-message/textproto"
 	gmail "google.golang.org/api/gmail/v1"
 )
 
@@ -122,17 +124,37 @@ func BuildGmailReaction(target *gmail.Message, own, emoji string) ([]byte, error
 		return nil, err
 	}
 	// Reply to the sender and the original visible recipients, excluding ourselves.
-	destinations := []string{from[0].Address}
+	destinations := []*mail.Address{from[0]}
 	seen := map[string]bool{strings.ToLower(own): true, strings.ToLower(from[0].Address): true}
 	for _, addr := range append(to, cc...) {
 		key := strings.ToLower(addr.Address)
 		if !seen[key] {
-			destinations = append(destinations, addr.Address)
+			destinations = append(destinations, addr)
 			seen[key] = true
 		}
 	}
 	var raw bytes.Buffer
-	fmt.Fprintf(&raw, "From: %s\r\nTo: %s\r\nSubject: %s\r\nIn-Reply-To: <%s>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=%q\r\n\r\n", own, strings.Join(destinations, ", "), subject, targetID, writer.Boundary())
+
+	var header gomail.Header
+	header.SetAddressList("From", []*mail.Address{{Address: own}})
+	header.SetAddressList("To", destinations)
+	header.SetSubject(subject)
+	header.Set("In-Reply-To", "<"+targetID+">")
+	references := parseReferencesHeader(headerValue(headers, "References"))
+	references = append(references, targetID)
+	encodedReferences := make([]string, 0, len(references))
+	for _, ref := range references {
+		if strings.ContainsAny(ref, "\r\n<> \t") {
+			return nil, errors.New("reaction target has invalid References")
+		}
+		encodedReferences = append(encodedReferences, "<"+ref+">")
+	}
+	header.Set("References", strings.Join(encodedReferences, " "))
+	header.Set("MIME-Version", "1.0")
+	header.SetContentType("multipart/alternative", map[string]string{"boundary": writer.Boundary()})
+	if err := msgtextproto.WriteHeader(&raw, header.Header.Header); err != nil {
+		return nil, err
+	}
 	raw.Write(body.Bytes())
 	return raw.Bytes(), nil
 }
