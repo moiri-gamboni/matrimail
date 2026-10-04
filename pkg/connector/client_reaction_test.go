@@ -39,7 +39,7 @@ func TestMatrixReactionTargetsTheSelectedEmail(t *testing.T) {
 	sender := &reactionSender{}
 	tm := email.NewThreadManager(nil)
 	tm.CacheForReceiver("email:me@example.com", &email.EmailThread{ThreadID: "root", GmailThreadID: "gmail", MessageID: "latest@example.com"})
-	client := &EmailClient{Main: &EmailConnector{ThreadManager: tm}, UserLogin: &bridgev2.UserLogin{UserLogin: &database.UserLogin{ID: "email:me@example.com"}}, Email: "me@example.com", Sender: sender}
+	client := &EmailClient{Main: &EmailConnector{ThreadManager: tm}, UserLogin: &bridgev2.UserLogin{Bridge: &bridgev2.Bridge{DB: newTestDB(t)}, UserLogin: &database.UserLogin{ID: "email:me@example.com"}}, Email: "me@example.com", Sender: sender}
 	msg := &bridgev2.MatrixReaction{TargetMessage: &database.Message{ID: "email:selected@example.com"}}
 	msg.Portal = &bridgev2.Portal{Portal: &database.Portal{PortalKey: networkid.PortalKey{ID: "thread:root", Receiver: "email:me@example.com"}}}
 	msg.Content = &event.ReactionEventContent{RelatesTo: event.RelatesTo{Key: "✅"}}
@@ -77,5 +77,40 @@ func TestReactionRefusalPostsNoticeInTargetChat(t *testing.T) {
 	}
 	if bot.room != "!target:example.com" || !strings.Contains(bot.body, "Reaction refused") {
 		t.Fatalf("notice to %s: %s", bot.room, bot.body)
+	}
+}
+
+func TestSameEmojiOnEmailPartsSendsOneReaction(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	br := &bridgev2.Bridge{DB: db}
+	key := networkid.PortalKey{ID: "thread:root", Receiver: "email:me@example.com"}
+	if err := db.Portal.Insert(ctx, &database.Portal{BridgeID: testBridgeID, PortalKey: key}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Ghost.Insert(ctx, &database.Ghost{BridgeID: testBridgeID, ID: "email:me@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	sender := &reactionSender{}
+	tm := email.NewThreadManager(nil)
+	tm.CacheForReceiver(string(key.Receiver), &email.EmailThread{ThreadID: "root", GmailThreadID: "gmail"})
+	client := &EmailClient{Main: &EmailConnector{ThreadManager: tm}, UserLogin: &bridgev2.UserLogin{Bridge: br, UserLogin: &database.UserLogin{ID: key.Receiver}}, Email: "me@example.com", Sender: sender}
+	for _, part := range []networkid.PartID{"body", "attachment-1"} {
+		target := &database.Message{BridgeID: testBridgeID, ID: "email:selected@example.com", PartID: part, Room: key, MXID: id.EventID("$" + part), SenderID: "email:me@example.com"}
+		if err := db.Message.Insert(ctx, target); err != nil {
+			t.Fatal(err)
+		}
+		msg := &bridgev2.MatrixReaction{TargetMessage: target}
+		msg.Portal = &bridgev2.Portal{Portal: &database.Portal{PortalKey: key}}
+		msg.Content = &event.ReactionEventContent{RelatesTo: event.RelatesTo{Key: "✅"}}
+		if _, err := client.HandleMatrixReaction(ctx, msg); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Reaction.Upsert(ctx, &database.Reaction{BridgeID: testBridgeID, Room: key, MessageID: target.ID, MessagePartID: part, SenderID: "email:me@example.com", EmojiID: "✅", MXID: id.EventID("$reaction-" + part)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sender.calls != 1 {
+		t.Fatalf("sent %d reactions for one emoji on one email", sender.calls)
 	}
 }

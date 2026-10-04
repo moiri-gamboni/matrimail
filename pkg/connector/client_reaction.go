@@ -43,6 +43,14 @@ func (ec *EmailClient) sendReaction(ctx context.Context, msg *bridgev2.MatrixRea
 	if !ok {
 		return "", errors.New("Email reactions require Gmail OAuth")
 	}
+
+	existing, err := ec.UserLogin.Bridge.DB.Reaction.GetByIDWithoutMessagePart(ctx, ec.UserLogin.ID, msg.TargetMessage.ID, MakeUserID(ec.Email), networkid.EmojiID(msg.Content.RelatesTo.Key))
+	if err != nil {
+		return "", err
+	}
+	if existing != nil {
+		return "", nil
+	}
 	thread, err := ec.resolveThreadForPortalWithMetadata(msg.Portal)
 	if err != nil {
 		return "", err
