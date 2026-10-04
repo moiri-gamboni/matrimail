@@ -1121,7 +1121,21 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 	usedInline := referencedInline(attachments, origHTML)
 
 	isReply := e.emailMessage.InReplyTo != "" || len(e.emailMessage.References) > 0
-	bodyText, origHTML := displayBodies(e.emailMessage.TextContent, origHTML, isReply)
+	foldHistory := isReply
+	if isReply && portal.Bridge != nil && portal.Bridge.DB != nil {
+		seen, err := historySeen(ctx, portal.Bridge.DB, portal.Receiver, e.emailMessage.InReplyTo, e.emailMessage.References)
+		if err != nil {
+			// The lookup failed: show the history rather than fold it, since a
+			// wrongly folded forward loses the only copy while a wrongly shown
+			// chain only repeats text. The context logger carries the email's
+			// IDs, so the line can be traced to its room.
+			zerolog.Ctx(ctx).Warn().Err(err).Msg("Could not tell whether the quoted history was bridged before; showing it unfolded")
+			foldHistory = false
+		} else {
+			foldHistory = seen
+		}
+	}
+	bodyText, origHTML := displayBodies(e.emailMessage.TextContent, origHTML, foldHistory)
 	// Only the images the displayed HTML shows are sent; those in stripped
 	// quoted history stay out, as do their attachments (usedInline).
 	// The marketing heuristic counts <img> tags, so it reads the HTML
@@ -1633,15 +1647,14 @@ func sanitizeFilename(name string) string {
 }
 
 // displayBodies returns the text and HTML bodies as the room should show
-// them. For replies (parent referenced via In-Reply-To or References) the
-// quoted history is stripped from both halves, so readers see only what the
-// sender wrote; Matrix renders the HTML half when present, so stripping only
-// the text would leave the chain visible. The email itself keeps the full
-// chain, and so does the thread's reply context, which reads the unstripped
-// message.
-func displayBodies(text, htmlBody string, isReply bool) (string, string) {
+// them. When foldHistory is set the quoted history is stripped from both
+// halves, so readers see only what the sender wrote; Matrix renders the HTML
+// half when present, so stripping only the text would leave the chain visible.
+// The email itself keeps the full chain, and so does the thread's reply
+// context, which reads the unstripped message.
+func displayBodies(text, htmlBody string, foldHistory bool) (string, string) {
 	htmlBody = stripEmptyProtonSignature(htmlBody)
-	if !isReply {
+	if !foldHistory {
 		return text, htmlBody
 	}
 	if stripped := StripQuotedReply(text); stripped != "" {
