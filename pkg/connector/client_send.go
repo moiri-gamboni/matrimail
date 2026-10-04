@@ -224,7 +224,7 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 		thread.IsDraft = false
 	}
 	if ec.Main.ThreadManager != nil {
-		ec.Main.ThreadManager.CacheForReceiver(string(ec.UserLogin.ID), thread)
+		ec.Main.ThreadManager.CacheForPortal(string(ec.UserLogin.ID), thread)
 	}
 
 	// Phase D: persist the updated thread state to Portal.Metadata so a 24h
@@ -312,7 +312,7 @@ func (ec *EmailClient) resolveThreadForPortalWithMetadata(portal *bridgev2.Porta
 		return nil, fmt.Errorf("matrimail: thread %s not found in cache and no portal metadata to restore from", threadID)
 	}
 	thread := ThreadFromPortalMetadata(pm)
-	ec.Main.ThreadManager.CacheForReceiver(string(ec.UserLogin.ID), thread)
+	ec.Main.ThreadManager.CacheForPortal(string(ec.UserLogin.ID), thread)
 	return thread, nil
 }
 

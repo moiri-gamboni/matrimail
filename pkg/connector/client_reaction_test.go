@@ -2,7 +2,9 @@ package connector
 
 import (
 	"context"
+	"fmt"
 	"github.com/Leicas/matrimail/pkg/email"
+	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
@@ -11,6 +13,7 @@ import (
 	"maunium.net/go/mautrix/id"
 	"strings"
 	"testing"
+	"time"
 )
 
 type reactionSender struct {
@@ -112,5 +115,60 @@ func TestSameEmojiOnEmailPartsSendsOneReaction(t *testing.T) {
 	}
 	if sender.calls != 1 {
 		t.Fatalf("sent %d reactions for one emoji on one email", sender.calls)
+	}
+}
+
+func TestActionsInSplitRoomPreserveGmailRouting(t *testing.T) {
+	for _, action := range []string{"reaction", "reply"} {
+		for _, warm := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/warm=%v", action, warm), func(t *testing.T) {
+				ctx := context.Background()
+				db := newTestDB(t)
+				log := zerolog.Nop()
+				br := &bridgev2.Bridge{DB: db, Log: log}
+				receiver := networkid.UserLoginID("email:me@example.com")
+				if err := db.Ghost.Insert(ctx, &database.Ghost{BridgeID: testBridgeID, ID: "email:alice@example.com"}); err != nil {
+					t.Fatal(err)
+				}
+				var split *bridgev2.Portal
+				for i, room := range []string{"primary", "split"} {
+					key := networkid.PortalKey{ID: networkid.PortalID("thread:" + room), Receiver: receiver}
+					portal := &database.Portal{BridgeID: testBridgeID, PortalKey: key, MXID: id.RoomID("!" + room + ":example.com"), Metadata: &PortalMetadata{ThreadID: room, GmailThreadID: "gmail", Participants: []string{"me@example.com", "alice@example.com"}, LastMessageID: "target@example.com", LastInboundMessageID: "target@example.com", LastFrom: "alice@example.com"}}
+					if err := db.Portal.Insert(ctx, portal); err != nil {
+						t.Fatal(err)
+					}
+					if err := db.Message.Insert(ctx, &database.Message{BridgeID: testBridgeID, Room: key, ID: networkid.MessageID(room + "@example.com"), PartID: "body", MXID: id.EventID("$" + room), SenderID: "email:alice@example.com", Timestamp: time.Unix(int64(100+i), 0)}); err != nil {
+						t.Fatal(err)
+					}
+					if room == "split" {
+						split = &bridgev2.Portal{Bridge: br, Portal: portal}
+					}
+				}
+				tm := email.NewThreadManager(&DBThreadMetadataResolver{Bridge: br, Log: &log})
+				if warm {
+					tm.CacheForReceiver(string(receiver), &email.EmailThread{ThreadID: "primary", GmailThreadID: "gmail"})
+				}
+				client := &EmailClient{Main: &EmailConnector{Bridge: br, ThreadManager: tm}, UserLogin: &bridgev2.UserLogin{Bridge: br, Log: log, UserLogin: &database.UserLogin{ID: receiver}}, Email: "me@example.com", Sender: &reactionSender{}}
+				if action == "reaction" {
+					msg := &bridgev2.MatrixReaction{TargetMessage: &database.Message{ID: "email:target@example.com"}}
+					msg.Portal = split
+					msg.Content = &event.ReactionEventContent{RelatesTo: event.RelatesTo{Key: "✅"}}
+					if _, err := client.HandleMatrixReaction(ctx, msg); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					msg := &bridgev2.MatrixMessage{}
+					msg.Portal = split
+					msg.Content = &event.MessageEventContent{MsgType: event.MsgText, Body: "fixture reply"}
+					if _, err := client.handleMatrixMessageOutbound(ctx, msg); err != nil {
+						t.Fatal(err)
+					}
+				}
+				thread := tm.DetermineThread(string(receiver), &email.ParsedEmail{GmailThreadID: "gmail", MessageID: "next@example.com", From: "alice@example.com"})
+				if thread.ThreadID != "primary" {
+					t.Fatalf("inbound Gmail mail routed to %s after %s in split room", thread.ThreadID, action)
+				}
+			})
+		}
 	}
 }

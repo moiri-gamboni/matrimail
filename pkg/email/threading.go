@@ -189,7 +189,7 @@ func (tm *ThreadManager) getCachedThread(receiver, threadID string) *EmailThread
 	return tm.GetThreadByID(receiver, threadID)
 }
 
-func (tm *ThreadManager) cacheThread(receiver string, thread *EmailThread) {
+func (tm *ThreadManager) cacheThread(receiver string, thread *EmailThread, updateGmailRoute bool) {
 	if thread == nil || thread.ThreadID == "" {
 		return
 	}
@@ -201,7 +201,10 @@ func (tm *ThreadManager) cacheThread(receiver string, thread *EmailThread) {
 	tm.knownThreads[key] = thread
 
 	// Update message ID index for fast lookups
-	tm.updateMessageIDIndex(receiver, thread)
+	tm.updateMessageIDIndex(thread)
+	if updateGmailRoute && thread.GmailThreadID != "" {
+		tm.gmailThreadIDIndex[receiver+"|"+thread.GmailThreadID] = thread
+	}
 
 	// Enforce cache size limit
 	if len(tm.knownThreads) > maxCachedThreads {
@@ -210,7 +213,7 @@ func (tm *ThreadManager) cacheThread(receiver string, thread *EmailThread) {
 }
 
 // updateMessageIDIndex maintains the message ID -> thread index
-func (tm *ThreadManager) updateMessageIDIndex(receiver string, thread *EmailThread) {
+func (tm *ThreadManager) updateMessageIDIndex(thread *EmailThread) {
 	// Index the thread ID itself
 	if thread.ThreadID != "" {
 		tm.messageIDIndex[thread.ThreadID] = thread
@@ -225,15 +228,17 @@ func (tm *ThreadManager) updateMessageIDIndex(receiver string, thread *EmailThre
 	if thread.MessageID != "" && thread.MessageID != thread.ThreadID {
 		tm.messageIDIndex[thread.MessageID] = thread
 	}
-	// Index by Gmail thread ID (per-receiver scoped) when known.
-	if thread.GmailThreadID != "" {
-		tm.gmailThreadIDIndex[receiver+"|"+thread.GmailThreadID] = thread
-	}
 }
 
 // CacheForReceiver exposes caching to callers (e.g., processor) to store a thread under a receiver scope.
 func (tm *ThreadManager) CacheForReceiver(receiver string, thread *EmailThread) {
-	tm.cacheThread(receiver, thread)
+	tm.cacheThread(receiver, thread, true)
+}
+
+// CacheForPortal preserves room-local reply context without changing where
+// inbound Gmail mail lands: a restored room may be a historical split.
+func (tm *ThreadManager) CacheForPortal(receiver string, thread *EmailThread) {
+	tm.cacheThread(receiver, thread, false)
 }
 
 // ParsedEmail represents a parsed email message

@@ -576,7 +576,7 @@ func (ec *EmailConnector) GetChatInfo(ctx context.Context, portal *bridgev2.Port
 		if thread == nil && portal != nil {
 			if pm := storedPortalMetadata(portal); pm != nil && pm.ThreadID == threadID {
 				thread = ThreadFromPortalMetadata(pm)
-				ec.ThreadManager.CacheForReceiver(string(userLogin.ID), thread)
+				ec.ThreadManager.CacheForPortal(string(userLogin.ID), thread)
 				ec.Bridge.Log.Debug().
 					Str("thread_id", threadID).
 					Bool("is_draft", thread.IsDraft).
