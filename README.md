@@ -199,7 +199,7 @@ To clear an email attention line silently, archive the chat instead of reacting.
 
 The bridge checks the target's current Gmail headers before sending. It posts a refusal notice in the chat when the account address is absent from both To and Cc, List-Id is present, Reply-To differs from From, or To and Cc contain more than 20 distinct recipients. Invalid or multiple emoji are also refused. Reaction removal cannot unsend the email. Gmail can impose additional account or message limits; a send rejection is shown in the chat.
 
-The MIME format follows [Google's email reaction specification](https://developers.google.com/workspace/gmail/reactions/format). Emoji validation uses Unicode 17 sequences.
+The MIME format follows [Google's email reaction specification](https://developers.google.com/workspace/gmail/reactions/format). A reaction must be exactly one emoji: every rune an emoji rune (mautrix's `emojirunes`) and the whole key one grapheme cluster.
 
 ### What's not bridged outbound
 

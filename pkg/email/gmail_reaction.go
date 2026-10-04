@@ -2,7 +2,6 @@ package email
 
 import (
 	"bytes"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,25 +13,35 @@ import (
 
 	gomail "github.com/emersion/go-message/mail"
 	msgtextproto "github.com/emersion/go-message/textproto"
+	"github.com/rivo/uniseg"
+	"go.mau.fi/util/emojirunes"
 	gmail "google.golang.org/api/gmail/v1"
 )
 
-// Unicode 17 emoji-test.txt, including presentation variants, excluding components.
-// Source: https://unicode.org/Public/17.0.0/emoji/emoji-test.txt
-//
-//go:embed emoji_sequences.txt
-var emojiSequences string
-
-var validReactionEmoji = func() map[string]bool {
-	out := make(map[string]bool)
-	for _, sequence := range strings.Split(emojiSequences, "\n") {
-		out[sequence] = true
+// isSingleEmoji reports whether s is exactly one emoji: every rune is an emoji
+// rune (or a joiner, variation selector or keycap part of one), the whole string
+// is one grapheme cluster, and it is not a bare joiner, selector or lone
+// regional-indicator letter. Gmail shows anything else as an ordinary email.
+func isSingleEmoji(s string) bool {
+	if !emojirunes.IsOnlyEmojis(s) || uniseg.GraphemeClusterCount(s) != 1 {
+		return false
 	}
-	return out
-}()
+	var visible, regional int
+	for _, r := range s {
+		switch {
+		case r == '\u200d' || r == '\ufe0f':
+		case r >= 0x1F1E6 && r <= 0x1F1FF:
+			regional++
+			visible++
+		default:
+			visible++
+		}
+	}
+	return visible > 0 && (regional == 0 || regional == 2)
+}
 
 func BuildGmailReaction(target *gmail.Message, own, emoji string) ([]byte, error) {
-	if !validReactionEmoji[emoji] {
+	if !isSingleEmoji(emoji) {
 		return nil, errors.New("Gmail reactions require exactly one Unicode emoji")
 	}
 	headers := target.Payload.Headers

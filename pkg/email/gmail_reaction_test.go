@@ -106,12 +106,12 @@ func TestGmailReactionRefusals(t *testing.T) {
 }
 
 func TestGmailReactionRequiresOneEmoji(t *testing.T) {
-	for _, value := range []string{"✅", "👨‍👩‍👧‍👦", "🇨🇭", "1️⃣", "👍🏽", "❤"} {
+	for _, value := range []string{"👍", "✅", "✅\ufe0f", "👨‍👩‍👧‍👦", "🇨🇭", "1️⃣", "#️⃣", "👍🏽", "❤", "❤\ufe0f", "🫨"} {
 		if _, err := BuildGmailReaction(reactionTarget(t), "sam@example.com", value); err != nil {
 			t.Errorf("%s: %v", value, err)
 		}
 	}
-	for _, value := range []string{"", "hello", "✅✅", "👍🏽✅", "\u200d", "🇨", "\ufe0f"} {
+	for _, value := range []string{"", "ok", "hello", "👍👍", "✅✅", "👍🏽✅", "\u200d", "🇨", "\ufe0f", "1", ":thumbsup:", "mxc://example.org/custom"} {
 		if _, err := BuildGmailReaction(reactionTarget(t), "sam@example.com", value); err == nil {
 			t.Errorf("accepted %q", value)
 		}
