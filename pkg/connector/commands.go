@@ -1390,9 +1390,9 @@ authorize again.`)
 		TLS:              true,
 		CreatedAt:        time.Now(),
 		LastSyncTime:     time.Now(),
-		MonitoredFolders: []string{"INBOX"},
+		MonitoredFolders: []string{"INBOX", "SENT"},
 	}
-	if err := connector.DB.UpsertAccount(ctx, account); err != nil {
+	if err := connector.DB.EnsureAccountRow(ctx, account); err != nil {
 		ce.Reply("❌ Failed to create account row: %v", err)
 		return
 	}
