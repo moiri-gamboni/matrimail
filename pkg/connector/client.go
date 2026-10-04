@@ -873,15 +873,19 @@ func (ec *EmailClient) performPeriodicSync(ctx context.Context) {
 // msgtypes that aren't declared here, so all four (image/file/video/audio)
 // must appear or media simply won't reach the connector.
 //
-// Edits, deletes, reactions, polls, and locations are all rejected — email
-// has no equivalent semantics. Threads are unsupported because matrimail
+// Edits, deletes, polls, and locations are all rejected — email
+// has no equivalent semantics. Gmail reactions are supported with recipient limits. Threads are unsupported because matrimail
 // already maps each conversation to its own portal/room. Replies are fully
 // supported (and produce In-Reply-To/References headers).
 func (ec *EmailClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {
+	reactionLevel := event.CapLevelRejected
+	if _, ok := ec.Sender.(gmailReactor); ok {
+		reactionLevel = event.CapLevelPartialSupport
+	}
 	const maxAttachmentBytes int64 = 25 * 1024 * 1024 // Gmail's per-message attachment ceiling
 
 	return &event.RoomFeatures{
-		ID: "matrimail-email-v1",
+		ID: "matrimail-email-v2",
 		Formatting: event.FormattingFeatureMap{
 			event.FmtBold:           event.CapLevelFullySupported,
 			event.FmtItalic:         event.CapLevelFullySupported,
@@ -922,7 +926,7 @@ func (ec *EmailClient) GetCapabilities(ctx context.Context, portal *bridgev2.Por
 		Reply:           event.CapLevelFullySupported,
 		Edit:            event.CapLevelRejected,
 		Delete:          event.CapLevelRejected,
-		Reaction:        event.CapLevelRejected,
+		Reaction:        reactionLevel,
 		Thread:          event.CapLevelUnsupported,
 		LocationMessage: event.CapLevelRejected,
 		Poll:            event.CapLevelRejected,

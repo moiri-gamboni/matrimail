@@ -232,6 +232,9 @@ func (p *Processor) ProcessParsedEmail(ctx context.Context, parsedEmail *ParsedE
 		ownAddresses = p.aliasResolver(receiver)
 	}
 	isOutbound := p.isOutboundMessage(mailbox) || isOwnAddress(parsedEmail.From, ownAddresses)
+	if parsedEmail.GmailThreadID != "" {
+		isOutbound = parsedEmail.GmailSent
+	}
 	parsedEmail.Outbound = isOutbound
 
 	// Step 0: Sent-folder dedup. If we just received an echo of a message we
@@ -1083,7 +1086,11 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 	var parts []*bridgev2.ConvertedMessagePart
 	// Helper to append a part with deterministic ID for idempotency
 	appendPart := func(id string, content *event.MessageEventContent) {
-		parts = append(parts, &bridgev2.ConvertedMessagePart{ID: networkid.PartID(id), Type: event.EventMessage, Content: content})
+		part := &bridgev2.ConvertedMessagePart{ID: networkid.PartID(id), Type: event.EventMessage, Content: content}
+		if id == "body" {
+			part.DBMetadata = messageMetadata(e.emailMessage.ParsedEmail)
+		}
+		parts = append(parts, part)
 	}
 	// Global safety net: never drop the whole message on panic. Emit a placeholder notice instead.
 	defer func() {
@@ -1307,6 +1314,9 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 		const maxChunks = 50 // Prevent excessive chunking that could overwhelm Matrix
 		for len(remaining) > 0 && chunkIndex <= maxChunks {
 			pid := fmt.Sprintf("body-chunk-%d", chunkIndex)
+			if chunkIndex == 1 {
+				pid = "body"
+			}
 			// Try to cut a chunk that fits comfortably under the target
 			chunk, _ := truncateUTF8PreserveWords(remaining, PerEventTarget)
 			if chunk == "" {
@@ -1332,7 +1342,7 @@ func (e *EmailMatrixEvent) ConvertMessage(ctx context.Context, portal *bridgev2.
 				chunk = chunk[:newLen]
 				chunkContent.Body = chunk
 			}
-			parts = append(parts, &bridgev2.ConvertedMessagePart{ID: networkid.PartID(pid), Type: event.EventMessage, Content: chunkContent})
+			appendPart(pid, chunkContent)
 			// Advance remaining
 			if len(chunk) >= len(remaining) {
 				remaining = ""

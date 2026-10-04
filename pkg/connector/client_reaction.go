@@ -1,0 +1,59 @@
+package connector
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/Leicas/matrimail/pkg/common"
+	"maunium.net/go/mautrix/bridgev2"
+	"maunium.net/go/mautrix/bridgev2/database"
+	"maunium.net/go/mautrix/bridgev2/networkid"
+)
+
+type gmailReactor interface {
+	React(context.Context, string, string, string, string) (string, error)
+}
+
+var _ bridgev2.ReactionHandlingNetworkAPI = (*EmailClient)(nil)
+
+func (ec *EmailClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (bridgev2.MatrixReactionPreResponse, error) {
+	emoji := msg.Content.RelatesTo.Key
+	return bridgev2.MatrixReactionPreResponse{SenderID: MakeUserID(ec.Email), EmojiID: networkid.EmojiID(emoji), Emoji: emoji}, nil
+}
+
+func (ec *EmailClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (*database.Reaction, error) {
+	sentID, err := ec.sendReaction(ctx, msg)
+	if err != nil {
+		if noticeErr := postErrorToPortal(ctx, ec.UserLogin.Bridge, msg.Portal, "Reaction refused", err.Error()); noticeErr != nil {
+			return nil, fmt.Errorf("%w (could not post refusal notice: %v)", err, noticeErr)
+		}
+		return nil, err
+	}
+	if sentID != "" && ec.Main.SentDedup != nil {
+		if err := ec.Main.SentDedup.Record(ctx, string(ec.UserLogin.ID), sentID, string(msg.Event.ID)); err != nil {
+			ec.UserLogin.Log.Warn().Err(err).Msg("Reaction sent but echo suppression could not be recorded")
+		}
+	}
+	return &database.Reaction{}, nil
+}
+
+func (ec *EmailClient) sendReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (string, error) {
+	reactor, ok := ec.Sender.(gmailReactor)
+	if !ok {
+		return "", errors.New("Email reactions require Gmail OAuth")
+	}
+	thread, err := ec.resolveThreadForPortalWithMetadata(msg.Portal)
+	if err != nil {
+		return "", err
+	}
+	return reactor.React(ctx, thread.GmailThreadID, common.MessageIDFromNetworkID(msg.TargetMessage.ID), ec.Email, msg.Content.RelatesTo.Key)
+}
+
+func (ec *EmailClient) HandleMatrixReactionRemove(ctx context.Context, msg *bridgev2.MatrixReactionRemove) error {
+	err := errors.New("Sent Gmail reactions cannot be removed by the bridge; archive the chat to clear an email silently")
+	if noticeErr := postErrorToPortal(ctx, ec.UserLogin.Bridge, msg.Portal, "Reaction removal refused", err.Error()); noticeErr != nil {
+		return noticeErr
+	}
+	return err
+}

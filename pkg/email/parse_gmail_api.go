@@ -39,6 +39,7 @@ func ParseGmailAPIMessage(msg *gmail.Message, fetch GmailAttachmentFetch) (*Pars
 		MessageID:     fmt.Sprintf("gmail-api-%s", msg.Id),
 		Date:          time.Unix(0, msg.InternalDate*int64(time.Millisecond)),
 		GmailThreadID: msg.ThreadId,
+		GmailSent:     hasLabel(msg.LabelIds, "SENT"),
 	}
 
 	for _, h := range msg.Payload.Headers {
@@ -58,6 +59,8 @@ func ParseGmailAPIMessage(msg *gmail.Message, fetch GmailAttachmentFetch) (*Pars
 			parsed.To = splitAddressList(h.Value)
 		case "cc":
 			parsed.Cc = splitAddressList(h.Value)
+		case "delivered-to":
+			parsed.RawDeliveredTo = append(parsed.RawDeliveredTo, splitAddressList(h.Value)...)
 		case "bcc":
 			parsed.Bcc = splitAddressList(h.Value)
 		case "in-reply-to":

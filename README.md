@@ -189,11 +189,23 @@ Once you've connected an account, you can send email from Matrix:
 - **Other providers**: SMTP submission on port 587 with STARTTLS. Same app password as your IMAP login.
 - **Sent-folder dedup**: matrimail tracks every Message-ID it sends and skips the inbound IMAP echo so you don't see your own messages twice.
 
-### What's NOT bridged outbound (v1)
+### Reply with a Gmail reaction
+
+React to an email message in Matrix or Beeper with one Unicode emoji. With Gmail OAuth, matrimail sends a Gmail reaction to that specific message in its Gmail thread. Other mail clients may show a normal “reacted via Gmail” email.
+
+To clear an email attention line silently, archive the chat instead of reacting. Archive sync must be enabled for this to archive the Gmail thread too.
+
+### Gmail reaction limits
+
+The bridge checks the target's current Gmail headers before sending. It posts a refusal notice in the chat when the account address is absent from both To and Cc, List-Id is present, Reply-To differs from From, or To and Cc contain more than 20 distinct recipients. Invalid or multiple emoji are also refused. Reaction removal cannot unsend the email. Gmail can impose additional account or message limits; a send rejection is shown in the chat.
+
+The MIME format follows [Google's email reaction specification](https://developers.google.com/workspace/gmail/reactions/format). Emoji validation uses Unicode 17 sequences.
+
+### What's not bridged outbound
 
 - Matrix message edits — email can't be unsent. Edits show a status icon, no email is sent.
 - Matrix redactions — email can't be unsent. Redactions only affect the local Matrix copy.
-- Reactions — emoji reactions don't bridge to email.
+- Reactions on accounts without Gmail OAuth, custom Matrix emoji, and reaction removals are not sent as email.
 
 Deployment-specific paths:
 
@@ -269,7 +281,7 @@ Most major email providers require you to generate a special "App Password" inst
 
 ## How it works
 
-1. **Threads map to rooms.** One email thread = one Matrix room.
+1. **Threads map to rooms.** Gmail API messages use Gmail's thread ID alone, including across restarts. Other mail uses RFC reply headers and forward detection.
 2. **Real-time delivery via IMAP IDLE.** No polling delays.
 3. **Participants come from To/CC/BCC.** Each appears as a ghost user.
 4. **Threading uses Message-ID, References, and In-Reply-To.** Standard RFC 5322.
@@ -280,9 +292,9 @@ Most major email providers require you to generate a special "App Password" inst
    - Gmail accounts in `modify` mode download attachment bytes with `users.messages.attachments.get` when the message is bridged, only for files under the upload limit and inline images the email shows.
 6. **Participant changes are posted as notices.** CC changes, new recipients.
 
-**Sent folder behavior:** replies you send from other email clients (Gmail web, a phone app) reach Matrix through your Sent mail. IMAP accounts watch a Sent folder chosen from the provider (`[Gmail]/Sent Mail` for gmail.com, `Sent Items` for Outlook, otherwise `Sent`) over its own IMAP IDLE connection. Gmail accounts in the default `modify` mode watch it only when the `SENT` label is among the labels selected at login.
+**Sent folder behavior:** replies you send from other email clients (Gmail web, a phone app) reach Matrix through your Sent mail. IMAP accounts watch a Sent folder chosen from the provider (`[Gmail]/Sent Mail` for gmail.com, `Sent Items` for Outlook, otherwise `Sent`) over its own IMAP IDLE connection. Gmail accounts in the default `modify` mode default to `INBOX` and `SENT`. Re-login and folder-enumeration failures keep the saved folder selection; choosing `default` also keeps it. An explicit folder selection replaces it.
 
-- A message is treated as yours when it is found in a Sent folder or under the `SENT` label, or when its From is your account's address or one of its Gmail send-as aliases, wherever it was found.
+- On the Gmail API path, a message is treated as yours only with Gmail's `SENT` label. On IMAP, a Sent folder or a From matching an account address still identifies own mail.
 - Your messages appear in their thread's room as sent by you. They never become the message a reply answers: a reply typed in Matrix, including one after `!matrimail reply-only`, is addressed from the thread's last message sent by someone else. In a thread you started that nobody has answered yet, a reply goes to the thread's other participants and `reply-only` has no one to answer.
 - A message under both INBOX and `SENT` (mail to yourself) is bridged once.
 - When matrimail itself sends an email, it records the Message-ID in a dedup table and skips that message when it reappears in Sent, so you only see one copy in Matrix.
@@ -306,6 +318,7 @@ The reverse holds too: archiving, moving to the inbox, reading or marking unread
 - A thread's first sync copies Gmail's state to Beeper. Chats created by a large import therefore end up archived and read wherever the mail is archived and read in Gmail, rather than all unread in the Beeper inbox.
 - A thread that was only ever sent from, never received, has no message in the Gmail inbox, so its chat is archived on its first sync.
 - A compose room is synced once its first message has been sent and Gmail has assigned the thread.
+- Historical split rooms for a Gmail thread sync only through the portal with the oldest message; the other rooms do not compete over archive or unread state.
 - If Beeper Server is unreachable or refuses the token, the bridge logs one warning, keeps bridging mail, retries every interval, and logs again when the sync recovers.
 
 ### How to turn it on

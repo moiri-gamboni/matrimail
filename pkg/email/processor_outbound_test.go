@@ -95,3 +95,27 @@ func TestProcessParsedEmail_OwnMessageKeepsInboundReplyContext(t *testing.T) {
 		t.Errorf("LastDeliveredTo = %q; want the alias Alice wrote to", th.LastDeliveredTo)
 	}
 }
+
+func TestGmailRequiresSentLabelForOwnAttribution(t *testing.T) {
+	for _, mailbox := range []string{"INBOX", "SENT"} {
+		p, login := newOutboundTestProcessor(t)
+		msg, err := p.ProcessParsedEmail(context.Background(), &ParsedEmail{MessageID: "own@example.com", From: "me@example.com", GmailThreadID: "gmail-thread", GmailSent: mailbox == "SENT"}, login, mailbox)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg.IsOutbound != (mailbox == "SENT") {
+			t.Errorf("%s: outbound=%v", mailbox, msg.IsOutbound)
+		}
+	}
+}
+
+func TestGmailMonitoredSentFallbackIsNotProofOfOwnMail(t *testing.T) {
+	p, login := newOutboundTestProcessor(t)
+	msg, err := p.ProcessParsedEmail(context.Background(), &ParsedEmail{MessageID: "forged@example.com", From: "me@example.com", GmailThreadID: "gmail"}, login, "SENT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.IsOutbound {
+		t.Fatal("monitored folder fallback attributed forged mail to the account owner")
+	}
+}

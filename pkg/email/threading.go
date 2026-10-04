@@ -255,14 +255,15 @@ type ParsedEmail struct {
 	// Matrix room — drafts have unstable Message-IDs and self-From, which
 	// otherwise makes them appear in Matrix as "a reply by someone".
 	IsDraft bool
-	// GmailThreadID is the Gmail API's server-assigned thread ID. Only set
-	// on the Gmail-API ingest path (modify-scope). Used as a fallback lookup
-	// key when RFC 5322 header threading misses.
+	// GmailThreadID is authoritative on the Gmail API path: reply headers
+	// can refer to another conversation inside a quoted forward.
 	GmailThreadID string
+	GmailSent     bool
 	// DeliveredTo is the user's own address that this inbound was addressed
 	// to (matched against the user's send-as aliases). Empty if no match.
 	// Used so replies preserve the alias as the From header.
-	DeliveredTo string
+	DeliveredTo    string
+	RawDeliveredTo []string
 	// Outbound marks a message the account owner sent, from this bridge or
 	// any other client. It is threaded and bridged like any other, but leaves
 	// the thread's inbound reply context alone: a reply answers the other
@@ -304,6 +305,20 @@ func isForwardedMessage(email *ParsedEmail) bool {
 
 // DetermineThread analyzes an email and determines which thread it belongs to
 func (tm *ThreadManager) DetermineThread(receiver string, email *ParsedEmail) *EmailThread {
+	if email.GmailThreadID != "" {
+		if thread := tm.findByGmailThreadID(receiver, email.GmailThreadID); thread != nil {
+			return tm.addToExistingThread(thread, email)
+		}
+		if resolver, ok := tm.resolver.(interface {
+			ResolveGmailThreadID(string, string) (string, bool)
+		}); ok {
+			if tid, found := resolver.ResolveGmailThreadID(receiver, email.GmailThreadID); found {
+				return tm.addToExistingThread(&EmailThread{ThreadID: tid, Subject: email.Subject}, email)
+			}
+		}
+		return tm.createNewThread(email)
+	}
+
 	// Forwarded emails always create new threads to avoid contaminating existing conversations
 	if isForwardedMessage(email) {
 		return tm.createNewThread(email)
@@ -344,16 +359,6 @@ func (tm *ThreadManager) DetermineThread(receiver string, email *ParsedEmail) *E
 			if thread := tm.findThreadByMessageID(refID); thread != nil {
 				return tm.addToExistingThread(thread, email)
 			}
-		}
-	}
-
-	// Step 2.5: Gmail thread ID fallback. RFC 5322 lookup misses when the parent
-	// wasn't previously bridged (cache evicted, fresh install, participants who
-	// weren't in the original chain replying-all). Gmail's server-assigned
-	// ThreadId remains stable across the whole conversation.
-	if email.GmailThreadID != "" {
-		if thread := tm.findByGmailThreadID(receiver, email.GmailThreadID); thread != nil {
-			return tm.addToExistingThread(thread, email)
 		}
 	}
 

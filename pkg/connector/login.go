@@ -291,15 +291,13 @@ func (elp *EmailLoginProcess) handleCredentials(ctx context.Context, input map[s
 	folders, err := client.ListFolders()
 	if err != nil {
 		client.Disconnect()
-		elp.connector.Bridge.Log.Warn().Err(err).Msg("Failed to list folders, falling back to INBOX only")
-		// Fall back to INBOX-only if folder listing fails
-		elp.selectedNames = []string{"INBOX"}
-		elp.selectedFolders = []imap.FolderInfo{{
-			Name:    "INBOX",
-			Display: "INBOX",
-			Icon:    "📥",
-			Type:    imap.FolderTypeStandard,
-		}}
+		elp.connector.Bridge.Log.Warn().Err(err).Msg("Failed to list folders, keeping saved folders or defaulting to INBOX and SENT")
+		// Preserve the watched folders when enumeration is unavailable.
+		elp.selectedNames, err = elp.loginFolders(ctx)
+		if err != nil {
+			return nil, err
+		}
+		elp.selectedFolders = elp.folderInfos(elp.selectedNames)
 		// Skip folder selection, go directly to save
 		return elp.completeLogin(ctx)
 	}
@@ -307,15 +305,13 @@ func (elp *EmailLoginProcess) handleCredentials(ctx context.Context, input map[s
 	elp.availableFolders = folders
 	client.Disconnect() // Close connection, will reconnect when starting monitoring
 
-	// If no folders found, fall back to INBOX
+	// Empty enumeration must not erase the watched folders.
 	if len(folders) == 0 {
-		elp.selectedNames = []string{"INBOX"}
-		elp.selectedFolders = []imap.FolderInfo{{
-			Name:    "INBOX",
-			Display: "INBOX",
-			Icon:    "📥",
-			Type:    imap.FolderTypeStandard,
-		}}
+		elp.selectedNames, err = elp.loginFolders(ctx)
+		if err != nil {
+			return nil, err
+		}
+		elp.selectedFolders = elp.folderInfos(elp.selectedNames)
 		return elp.completeLogin(ctx)
 	}
 
@@ -332,7 +328,7 @@ func (elp *EmailLoginProcess) handleCredentials(ctx context.Context, input map[s
 					Type:        bridgev2.LoginInputFieldTypeUsername,
 					ID:          "folder_selection",
 					Name:        "Folder Selection",
-					Description: "Enter folder number(s), 'default' for INBOX, or 'cancel'",
+					Description: "Enter folder number(s), 'default' for saved folders or INBOX and SENT, or 'cancel'",
 				},
 			},
 		},
@@ -341,7 +337,6 @@ func (elp *EmailLoginProcess) handleCredentials(ctx context.Context, input map[s
 
 // handleFolderSelection validates folder selection and proceeds to confirmation
 func (elp *EmailLoginProcess) handleFolderSelection(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
-	_ = ctx // ctx reserved for future use
 	selectionInput := ""
 	for key, value := range input {
 		if key == "folder_selection" {
@@ -368,7 +363,7 @@ func (elp *EmailLoginProcess) handleFolderSelection(ctx context.Context, input m
 						Type:        bridgev2.LoginInputFieldTypeUsername,
 						ID:          "folder_selection",
 						Name:        "Folder Selection",
-						Description: "Enter folder number(s), 'default' for INBOX, or 'cancel'",
+						Description: "Enter folder number(s), 'default' for saved folders or INBOX and SENT, or 'cancel'",
 					},
 				},
 			},
@@ -377,7 +372,14 @@ func (elp *EmailLoginProcess) handleFolderSelection(ctx context.Context, input m
 
 	// Store selection
 	elp.selectedNames = result.SelectedNames
-	elp.selectedFolders = result.SelectedInfos
+	if strings.EqualFold(strings.TrimSpace(selectionInput), "default") {
+		var err error
+		elp.selectedNames, err = elp.loginFolders(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	elp.selectedFolders = elp.folderInfos(elp.selectedNames)
 
 	// Move to confirmation step
 	elp.currentStep = "confirmation"
@@ -424,7 +426,7 @@ func (elp *EmailLoginProcess) handleConfirmation(ctx context.Context, input map[
 						Type:        bridgev2.LoginInputFieldTypeUsername,
 						ID:          "folder_selection",
 						Name:        "Folder Selection",
-						Description: "Enter folder number(s) or 'default' for INBOX",
+						Description: "Enter folder number(s) or 'default' for saved folders or INBOX and SENT",
 					},
 				},
 			},
@@ -880,9 +882,9 @@ func (elp *EmailLoginProcess) handleOAuthEmail(ctx context.Context, input map[st
 		TLS:              tls,
 		CreatedAt:        time.Now(),
 		LastSyncTime:     time.Now(),
-		MonitoredFolders: []string{"INBOX"},
+		MonitoredFolders: []string{"INBOX", "SENT"},
 	}
-	if err := elp.connector.DB.UpsertAccount(ctx, account); err != nil {
+	if err := elp.connector.DB.EnsureAccountRow(ctx, account); err != nil {
 		return nil, fmt.Errorf("failed to pre-create account row: %w", err)
 	}
 
@@ -1084,12 +1086,13 @@ func (elp *EmailLoginProcess) finishOAuthExchange(ctx context.Context, code stri
 	folders, ferr := elp.enumerateFoldersForOAuth(ctx, svc, tok.AccessToken)
 	if ferr != nil || len(folders) == 0 {
 		if ferr != nil {
-			elp.connector.Bridge.Log.Warn().Err(ferr).Msg("OAuth folder enumeration failed, falling back to INBOX only")
+			elp.connector.Bridge.Log.Warn().Err(ferr).Msg("OAuth folder enumeration failed, keeping saved folders or defaulting to INBOX and SENT")
 		}
-		elp.selectedNames = []string{"INBOX"}
-		elp.selectedFolders = []imap.FolderInfo{{
-			Name: "INBOX", Display: "INBOX", Icon: "📥", Type: imap.FolderTypeStandard,
-		}}
+		elp.selectedNames, err = elp.loginFolders(ctx)
+		if err != nil {
+			return nil, err
+		}
+		elp.selectedFolders = elp.folderInfos(elp.selectedNames)
 		return elp.completeLogin(ctx)
 	}
 	elp.availableFolders = folders
@@ -1103,7 +1106,7 @@ func (elp *EmailLoginProcess) finishOAuthExchange(ctx context.Context, code stri
 				Type:        bridgev2.LoginInputFieldTypeUsername,
 				ID:          "folder_selection",
 				Name:        "Folder Selection",
-				Description: "Enter folder number(s), 'default' for INBOX, or 'cancel'",
+				Description: "Enter folder number(s), 'default' for saved folders or INBOX and SENT, or 'cancel'",
 			}},
 		},
 	}, nil
@@ -1145,4 +1148,30 @@ func (elp *EmailLoginProcess) listFoldersOAuthIMAP(ctx context.Context, accessTo
 	}
 	defer client.Disconnect()
 	return client.ListFolders()
+}
+
+func (elp *EmailLoginProcess) loginFolders(ctx context.Context) ([]string, error) {
+	account, err := elp.connector.DB.GetAccount(ctx, elp.user.MXID.String(), elp.email)
+	if err != nil {
+		return nil, err
+	}
+	if account != nil && len(account.MonitoredFolders) > 0 {
+		return account.MonitoredFolders, nil
+	}
+	return []string{"INBOX", "SENT"}, nil
+}
+
+func (elp *EmailLoginProcess) folderInfos(names []string) []imap.FolderInfo {
+	infos := make([]imap.FolderInfo, 0, len(names))
+	for _, name := range names {
+		info := imap.FolderInfo{Name: name, Display: name, Type: imap.FolderTypeStandard, Icon: "📁"}
+		for _, available := range elp.availableFolders {
+			if available.Name == name {
+				info = available
+				break
+			}
+		}
+		infos = append(infos, info)
+	}
+	return infos
 }

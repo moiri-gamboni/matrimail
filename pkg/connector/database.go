@@ -94,23 +94,20 @@ type EmailAccount struct {
 // GetMonitoredFoldersJSON serializes MonitoredFolders to JSON for database storage
 func (a *EmailAccount) GetMonitoredFoldersJSON() string {
 	if len(a.MonitoredFolders) == 0 {
-		return `["INBOX"]` // Default to INBOX if not set
+		return `["INBOX","SENT"]`
 	}
-	data, err := json.Marshal(a.MonitoredFolders)
-	if err != nil {
-		return `["INBOX"]`
-	}
+	data, _ := json.Marshal(a.MonitoredFolders)
 	return string(data)
 }
 
 // SetMonitoredFoldersFromJSON deserializes MonitoredFolders from JSON database storage
 func (a *EmailAccount) SetMonitoredFoldersFromJSON(jsonStr string) {
 	if jsonStr == "" {
-		a.MonitoredFolders = []string{"INBOX"}
+		a.MonitoredFolders = []string{"INBOX", "SENT"}
 		return
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &a.MonitoredFolders); err != nil {
-		a.MonitoredFolders = []string{"INBOX"}
+		a.MonitoredFolders = []string{"INBOX", "SENT"}
 	}
 }
 
@@ -480,7 +477,7 @@ func (eaq *EmailAccountQuery) CreateTable(ctx context.Context) error {
 			tls BOOLEAN NOT NULL,
 			created_at TIMESTAMP NOT NULL,
 			last_sync_time TIMESTAMP,
-			monitored_folders TEXT DEFAULT '["INBOX"]',
+			monitored_folders TEXT DEFAULT '["INBOX","SENT"]',
 			auth_type TEXT NOT NULL DEFAULT 'password',
 			oauth_provider TEXT,
 			oauth_refresh_token TEXT,
@@ -501,7 +498,7 @@ func (eaq *EmailAccountQuery) CreateTable(ctx context.Context) error {
 	// which we deliberately swallow. Each statement is independent so a single
 	// already-applied migration doesn't block the rest.
 	for _, stmt := range []string{
-		`ALTER TABLE email_accounts ADD COLUMN monitored_folders TEXT DEFAULT '["INBOX"]'`,
+		`ALTER TABLE email_accounts ADD COLUMN monitored_folders TEXT DEFAULT '["INBOX","SENT"]'`,
 		`ALTER TABLE email_accounts ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'password'`,
 		`ALTER TABLE email_accounts ADD COLUMN oauth_provider TEXT`,
 		`ALTER TABLE email_accounts ADD COLUMN oauth_refresh_token TEXT`,
@@ -809,7 +806,7 @@ func (eaq *EmailAccountQuery) GetAccount(ctx context.Context, userMXID, email st
 	account := &EmailAccount{}
 	rows, err := eaq.DB.Query(ctx, dialectQuery(eaq.DB.Dialect, `
 		SELECT user_mxid, email, username, password, host, port, tls, created_at, last_sync_time,
-		       COALESCE(monitored_folders, '["INBOX"]'), COALESCE(auth_type, 'password')
+		       COALESCE(monitored_folders, '["INBOX","SENT"]'), COALESCE(auth_type, 'password')
 		FROM email_accounts
 		WHERE user_mxid = ? AND email = ?
 	`), userMXID, email)
@@ -849,7 +846,7 @@ func (eaq *EmailAccountQuery) GetAccount(ctx context.Context, userMXID, email st
 func (eaq *EmailAccountQuery) GetUserAccounts(ctx context.Context, userMXID string) ([]*EmailAccount, error) {
 	rows, err := eaq.DB.Query(ctx, dialectQuery(eaq.DB.Dialect, `
 		SELECT user_mxid, email, username, password, host, port, tls, created_at, last_sync_time,
-		       COALESCE(monitored_folders, '["INBOX"]'), COALESCE(auth_type, 'password')
+		       COALESCE(monitored_folders, '["INBOX","SENT"]'), COALESCE(auth_type, 'password')
 		FROM email_accounts
 		WHERE user_mxid = ?
 		ORDER BY created_at ASC
@@ -887,7 +884,7 @@ func (eaq *EmailAccountQuery) GetUserAccounts(ctx context.Context, userMXID stri
 func (eaq *EmailAccountQuery) GetUserAccountsBasic(ctx context.Context, userMXID string) ([]*EmailAccount, error) {
 	rows, err := eaq.DB.Query(ctx, dialectQuery(eaq.DB.Dialect, `
 		SELECT user_mxid, email, username, host, port, tls, created_at, last_sync_time,
-		       COALESCE(monitored_folders, '["INBOX"]'), COALESCE(auth_type, 'password')
+		       COALESCE(monitored_folders, '["INBOX","SENT"]'), COALESCE(auth_type, 'password')
 		FROM email_accounts
 		WHERE user_mxid = ?
 		ORDER BY created_at ASC
@@ -940,6 +937,22 @@ func (eaq *EmailAccountQuery) UpsertAccount(ctx context.Context, account *EmailA
 	`), account.UserMXID, account.Email, account.Username, enc,
 		account.Host, account.Port, account.TLS, account.CreatedAt, account.LastSyncTime,
 		account.GetMonitoredFoldersJSON())
+	return err
+}
+
+// EnsureAccountRow creates OAuth storage without replacing a returning user's settings.
+func (eaq *EmailAccountQuery) EnsureAccountRow(ctx context.Context, account *EmailAccount) error {
+	enc, err := encryptString("")
+	if err != nil {
+		return err
+	}
+	_, err = eaq.DB.Exec(ctx, dialectQuery(eaq.DB.Dialect, `
+ INSERT INTO email_accounts
+ (user_mxid, email, username, password, host, port, tls, created_at, last_sync_time, monitored_folders)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ ON CONFLICT (user_mxid, email) DO NOTHING
+ `), account.UserMXID, account.Email, account.Username, enc, account.Host, account.Port, account.TLS,
+		account.CreatedAt, account.LastSyncTime, account.GetMonitoredFoldersJSON())
 	return err
 }
 

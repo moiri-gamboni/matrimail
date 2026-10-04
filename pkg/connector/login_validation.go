@@ -26,7 +26,7 @@ func ValidateFolderSelection(input string, availableFolders []imap.FolderInfo) F
 	if input == "" {
 		return FolderSelectionResult{
 			Valid:        false,
-			ErrorMessage: "Please enter a folder number, or type `default` for INBOX, or `cancel` to abort.",
+			ErrorMessage: "Please enter a folder number, or type `default` for saved folders or INBOX and SENT, or `cancel` to abort.",
 		}
 	}
 
@@ -81,7 +81,7 @@ func ValidateFolderSelection(input string, availableFolders []imap.FolderInfo) F
 		if err != nil {
 			return FolderSelectionResult{
 				Valid:        false,
-				ErrorMessage: fmt.Sprintf("❌ Invalid input: `%s` is not a number.\n\nPlease enter folder numbers (e.g., `1` or `1,3,5`), `default` for INBOX, or `cancel`.", part),
+				ErrorMessage: fmt.Sprintf("❌ Invalid input: `%s` is not a number.\n\nPlease enter folder numbers (e.g., `1` or `1,3,5`), `default` for saved folders or INBOX and SENT, or `cancel`.", part),
 			}
 		}
 
@@ -148,7 +148,7 @@ func BuildFolderSelectionPrompt(folders []imap.FolderInfo, providerName string) 
 	sb.WriteString("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	sb.WriteString("Reply with folder number(s) separated by commas.\n")
 	sb.WriteString("**Examples:** `1` for INBOX only, or `1,3` for INBOX + another folder\n")
-	sb.WriteString("Type `default` to monitor INBOX (recommended for most users)\n")
+	sb.WriteString("Type `default` to keep saved folders, or monitor INBOX and SENT on a fresh login\n")
 	sb.WriteString("Type `cancel` to abort setup")
 
 	return sb.String()

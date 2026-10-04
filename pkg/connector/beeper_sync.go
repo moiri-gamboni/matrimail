@@ -237,6 +237,16 @@ func gmailThreadForChat(db *database.Database, loginID string) func(ctx context.
 		if pm == nil {
 			return "", nil
 		}
+		if pm.GmailThreadID == "" {
+			return "", nil
+		}
+		primary, err := primaryGmailPortal(ctx, db, portal.Receiver, pm.GmailThreadID)
+		if err != nil {
+			return "", err
+		}
+		if primary == nil || primary.PortalKey != portal.PortalKey {
+			return "", nil
+		}
 		return pm.GmailThreadID, nil
 	}
 }

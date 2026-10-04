@@ -647,7 +647,8 @@ func (ec *EmailConnector) GetDBMetaTypes() database.MetaTypes {
 		// Portal metadata is used to persist synthetic compose threads (and
 		// last-known thread state for normal threads) across the 24h
 		// ThreadManager cache TTL. See pkg/connector/portal_metadata.go.
-		Portal: func() any { return &PortalMetadata{} },
+		Portal:  func() any { return &PortalMetadata{} },
+		Message: func() any { return &MessageMetadata{} },
 	}
 }
 

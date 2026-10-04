@@ -95,3 +95,17 @@ func (r *DBThreadMetadataResolver) ResolveThreadID(receiver, messageID string) (
 func normalizeThreadID(portalOrThreadID string) string {
 	return strings.TrimPrefix(strings.TrimSpace(portalOrThreadID), "thread:")
 }
+
+func (r *DBThreadMetadataResolver) ResolveGmailThreadID(receiver, gmailID string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	portal, err := primaryGmailPortal(ctx, r.Bridge.DB, networkid.UserLoginID(receiver), gmailID)
+	if err != nil {
+		r.Log.Error().Err(err).Msg("Gmail thread lookup failed")
+		return "", false
+	}
+	if portal == nil {
+		return "", false
+	}
+	return normalizeThreadID(string(portal.ID)), true
+}
