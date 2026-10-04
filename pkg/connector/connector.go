@@ -648,7 +648,7 @@ func (ec *EmailConnector) GetDBMetaTypes() database.MetaTypes {
 		// last-known thread state for normal threads) across the 24h
 		// ThreadManager cache TTL. See pkg/connector/portal_metadata.go.
 		Portal:  func() any { return &PortalMetadata{} },
-		Message: func() any { return &MessageMetadata{} },
+		Message: func() any { return &email.MessageMetadata{} },
 	}
 }
 

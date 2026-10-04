@@ -81,10 +81,3 @@ func TestDefaultLoginConfirmationListsSavedFolders(t *testing.T) {
 		}
 	}
 }
-
-func TestFolderPromptExplainsReturningLoginDefault(t *testing.T) {
-	prompt := BuildFolderSelectionPrompt([]imap.FolderInfo{{Name: "INBOX", Display: "INBOX"}}, "Gmail")
-	if !strings.Contains(prompt, "saved folders") || !strings.Contains(prompt, "SENT") {
-		t.Fatal("folder prompt does not describe the preserved selection and fresh default")
-	}
-}

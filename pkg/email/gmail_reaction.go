@@ -35,9 +35,6 @@ func BuildGmailReaction(target *gmail.Message, own, emoji string) ([]byte, error
 	if !validReactionEmoji[emoji] {
 		return nil, errors.New("Gmail reactions require exactly one Unicode emoji")
 	}
-	if target == nil || target.Payload == nil {
-		return nil, errors.New("reaction target has no headers")
-	}
 	headers := target.Payload.Headers
 	parse := func(name string) ([]*mail.Address, error) {
 		var values []*mail.Address
@@ -93,9 +90,6 @@ func BuildGmailReaction(target *gmail.Message, own, emoji string) ([]byte, error
 	targetID := cleanMessageID(headerValue(headers, "Message-ID"))
 	if targetID == "" || strings.ContainsAny(targetID, "\r\n<> \t") {
 		return nil, errors.New("reaction target has no single valid Message-ID")
-	}
-	if strings.ContainsAny(own, "\r\n") {
-		return nil, errors.New("invalid reaction sender")
 	}
 	subject := strings.ReplaceAll(strings.ReplaceAll(headerValue(headers, "Subject"), "\r", ""), "\n", "")
 	var body bytes.Buffer
