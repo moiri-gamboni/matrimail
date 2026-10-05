@@ -164,7 +164,10 @@ func TestActionsInSplitRoomPreserveGmailRouting(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				thread := tm.DetermineThread(string(receiver), &email.ParsedEmail{GmailThreadID: "gmail", MessageID: "next@example.com", From: "alice@example.com"})
+				thread, err := tm.DetermineThread(string(receiver), &email.ParsedEmail{GmailThreadID: "gmail", MessageID: "next@example.com", From: "alice@example.com"})
+				if err != nil {
+					t.Fatal(err)
+				}
 				if thread.ThreadID != "primary" {
 					t.Fatalf("inbound Gmail mail routed to %s after %s in split room", thread.ThreadID, action)
 				}

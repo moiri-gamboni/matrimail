@@ -33,14 +33,17 @@ func TestDetermineThread_ResolverMissCarriesOnlyTheNewMessage(t *testing.T) {
 	tm := NewThreadManager(fakeResolver{tid: "original-thread@example.com"})
 
 	// A reply arriving cold: the resolver knows its thread, the cache does not.
-	thread := tm.DetermineThread("moiri@apartresearch.com", &ParsedEmail{
+	thread, err := tm.DetermineThread("me@example.com", &ParsedEmail{
 		MessageID:   "reply-7@example.com",
 		InReplyTo:   "reply-6@example.com",
 		From:        "alice@example.com",
-		To:          []string{"moiri@apartresearch.com"},
+		To:          []string{"me@example.com"},
 		Subject:     "Re: Grant reporting",
 		TextContent: "Numbers attached.",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if thread.ThreadID != "original-thread@example.com" {
 		t.Fatalf("ThreadID = %q; the resolver's answer should win", thread.ThreadID)
@@ -51,7 +54,7 @@ func TestDetermineThread_ResolverMissCarriesOnlyTheNewMessage(t *testing.T) {
 	if thread.LastInboundMessageID != "reply-7@example.com" {
 		t.Errorf("LastInboundMessageID = %q, want reply-7@example.com", thread.LastInboundMessageID)
 	}
-	if len(thread.LastTo) != 1 || thread.LastTo[0] != "moiri@apartresearch.com" {
+	if len(thread.LastTo) != 1 || thread.LastTo[0] != "me@example.com" {
 		t.Errorf("LastTo = %v, want the newest message's recipients", thread.LastTo)
 	}
 

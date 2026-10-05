@@ -266,11 +266,11 @@ func (p *Processor) ProcessParsedEmail(ctx context.Context, parsedEmail *ParsedE
 	}
 
 	// Step 1: Determine thread membership (scoped by receiver)
-	thread := p.threadManager.DetermineThread(receiver, parsedEmail)
-	p.threadManager.CacheForReceiver(receiver, thread)
-	if thread == nil {
-		return nil, fmt.Errorf("failed to determine thread for message %s", parsedEmail.MessageID)
+	thread, err := p.threadManager.DetermineThread(receiver, parsedEmail)
+	if err != nil {
+		return nil, err
 	}
+	p.threadManager.CacheForReceiver(receiver, thread)
 
 	// Step 2: Create portal key for this thread
 	portalKey := networkid.PortalKey{
