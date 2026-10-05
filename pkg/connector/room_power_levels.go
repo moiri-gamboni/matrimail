@@ -2,9 +2,11 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/Leicas/matrimail/pkg/matrix"
+	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/event"
 )
 
@@ -16,20 +18,57 @@ func (ec *EmailConnector) refreshRoomPowerLevels(ctx context.Context) {
 		return
 	}
 	updated := 0
+	alreadyOK := 0
 	failed := 0
 	for _, portal := range portals {
 		log := ec.Bridge.Log.With().Stringer("room_id", portal.MXID).Logger()
-		log.Debug().Msg("GetPowerLevels request")
-		current, err := ec.Bridge.Matrix.GetPowerLevels(ctx, portal.MXID)
-		log.Debug().Interface("power_levels", current).Err(err).Msg("GetPowerLevels response")
+		log.Debug().Str("event_type", event.StatePowerLevels.Type).Str("state_key", "").Msg("GetStateEvent request")
+		state, err := ec.Bridge.Matrix.(bridgev2.MatrixConnectorWithArbitraryRoomState).GetStateEvent(ctx, portal.MXID, event.StatePowerLevels, "")
+		log.Debug().Interface("state_event", state).Err(err).Msg("GetStateEvent response")
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to get email room power levels")
 			failed++
 			continue
 		}
-		// The framework may return cached state. Failed writes must not change it.
+		if state == nil {
+			log.Error().Msg("Homeserver returned no email room power level event")
+			failed++
+			continue
+		}
+		log.Debug().Str("raw_content", string(state.Content.VeryRaw)).Msg("Email room power level content")
+		current := &event.PowerLevelsEventContent{}
+		// FullStateEvent ignores content parse errors, so decode the raw content explicitly.
+		if err := json.Unmarshal(state.Content.VeryRaw, current); err != nil {
+			log.Error().Err(err).Msg("Failed to parse email room power levels")
+			failed++
+			continue
+		}
+		botID := ec.Bridge.Bot.GetMXID()
+		botLevel, hasBot := current.Users[botID]
+		humanLevel := current.UsersDefault
+		if login := ec.Bridge.GetCachedUserLoginByID(portal.Receiver); login != nil {
+			humanLevel = current.GetUserLevel(login.User.MXID)
+		}
+		// FullStateEvent may populate the state cache; failed writes must not mutate it.
 		power := current.Clone()
-		if !matrix.BuildReadOnlyPowerLevels().Apply(ec.Bridge.Bot.GetMXID(), power) {
+		overrides := matrix.BuildReadOnlyPowerLevels()
+		changed := overrides.Apply(botID, power)
+		log.Info().Int("bot_level", botLevel).Int("human_level", humanLevel).
+			Int("users_default", current.UsersDefault).
+			Int("reaction_level", current.GetEventLevel(event.EventReaction)).Int("events_default", current.EventsDefault).
+			Bool("changed", changed).Msg("Email room power level refresh decision")
+		if !hasBot {
+			log.Error().Interface("power_levels", current).Msg("Email room power levels have no bridge bot entry")
+			failed++
+			continue
+		}
+		if overrides.Apply("", power.Clone()) {
+			log.Error().Msg("Bridge bot cannot apply required email room power levels")
+			failed++
+			continue
+		}
+		if !changed {
+			alreadyOK++
 			continue
 		}
 		content := &event.Content{Parsed: power}
@@ -43,5 +82,5 @@ func (ec *EmailConnector) refreshRoomPowerLevels(ctx context.Context) {
 		}
 		updated++
 	}
-	ec.Bridge.Log.Info().Int("portals", len(portals)).Int("updated", updated).Int("failed", failed).Msg("Email room power level refresh complete")
+	ec.Bridge.Log.Info().Int("portals", len(portals)).Int("updated", updated).Int("already_ok", alreadyOK).Int("failed", failed).Msg("Email room power level refresh complete")
 }

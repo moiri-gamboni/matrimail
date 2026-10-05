@@ -1,0 +1,30 @@
+{
+  "type": "m.room.power_levels",
+  "state_key": "",
+  "room_id": "!one:example.com",
+  "sender": "@bot:example.com",
+  "event_id": "$power-levels",
+  "origin_server_ts": 0,
+  "content": {
+    "users": {"@bot:example.com": 9001, "@human:example.com": 0},
+    "users_default": 0,
+    "events_default": 0,
+    "state_default": 101,
+    "ban": 101,
+    "kick": 101,
+    "invite": 101,
+    "redact": 101,
+    "events": {
+      "m.room.tombstone": 100,
+      "m.room.server_acl": 100,
+      "m.room.encryption": 100,
+      "m.room.name": 101,
+      "m.room.topic": 101,
+      "m.room.avatar": 101,
+      "m.room.message": 101,
+      "m.reaction": 101,
+      "m.room.redaction": 101,
+      "com.example.custom": 42
+    }
+  }
+}
