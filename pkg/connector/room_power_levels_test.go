@@ -34,7 +34,7 @@ type roomPowerBot struct {
 	bridgev2.MatrixAPI
 	matrix   *roomPowerMatrix
 	writes   int
-	failSend bool
+	failSend id.RoomID
 }
 
 func (b *roomPowerBot) GetMXID() id.UserID { return "@bot:example.com" }
@@ -42,7 +42,7 @@ func (b *roomPowerBot) SendState(_ context.Context, room id.RoomID, typ event.Ty
 	if typ != event.StatePowerLevels || key != "" {
 		return nil, errors.New("unexpected state")
 	}
-	if b.failSend {
+	if room == b.failSend {
 		return nil, errors.New("send failed")
 	}
 	b.matrix.levels[room] = content.Parsed.(*event.PowerLevelsEventContent)
@@ -100,23 +100,32 @@ func TestStartupUpdatesExistingEmailRoomPowerLevelsIdempotently(t *testing.T) {
 func TestStartupPowerLevelFailuresAreReported(t *testing.T) {
 	for _, failure := range []string{"read", "send"} {
 		t.Run(failure, func(t *testing.T) {
-			ec, bot, _ := reactionRoomConnector(t)
+			ec, bot, output := reactionRoomConnector(t)
 			if failure == "read" {
 				bot.matrix.failRead = "!one:example.com"
 			} else {
-				bot.failSend = true
+				bot.failSend = "!one:example.com"
 			}
-			if err := ec.Start(context.Background()); err == nil {
-				t.Error("startup silently succeeded")
+			if err := ec.Start(context.Background()); err != nil {
+				t.Errorf("refresh failure stopped startup: %v", err)
 			}
-			if failure == "read" && bot.writes != 1 {
+			if bot.writes != 1 {
 				t.Errorf("healthy room was not updated: %d writes", bot.writes)
+			}
+			errorLogged := false
+			for _, line := range strings.Split(output.String(), "\n") {
+				if strings.Contains(line, `"level":"error"`) && strings.Contains(line, `"room_id":"!one:example.com"`) && strings.Contains(line, `"error":"`+failure+` failed"`) {
+					errorLogged = true
+				}
+			}
+			if !errorLogged || !strings.Contains(output.String(), `"updated":1,"failed":1`) {
+				t.Errorf("missing error and summary logs: %s", output)
 			}
 			if failure == "send" {
 				if bot.matrix.levels["!one:example.com"].GetEventLevel(event.EventReaction) != 101 {
 					t.Error("failed write changed cached state")
 				}
-				bot.failSend = false
+				bot.failSend = ""
 				if err := ec.Start(context.Background()); err != nil {
 					t.Fatal(err)
 				}
@@ -125,5 +134,18 @@ func TestStartupPowerLevelFailuresAreReported(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestStartupContinuesWhenPortalListingFails(t *testing.T) {
+	ec, _, output := reactionRoomConnector(t)
+	if err := ec.Bridge.DB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ec.Start(context.Background()); err != nil {
+		t.Errorf("list failure stopped startup: %v", err)
+	}
+	if !strings.Contains(output.String(), `"level":"error"`) {
+		t.Errorf("list failure was not logged: %s", output)
 	}
 }

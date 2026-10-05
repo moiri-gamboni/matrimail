@@ -460,7 +460,8 @@ func (ec *EmailConnector) Start(ctx context.Context) error {
 	if err := ec.Config.BeeperSync.validate(); err != nil {
 		return err
 	}
-	return ec.refreshRoomPowerLevels(ctx)
+	ec.refreshRoomPowerLevels(ctx)
+	return nil
 }
 
 // Stop gracefully shuts down the EmailConnector and all IMAP connections
