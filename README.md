@@ -197,6 +197,8 @@ To clear an email attention line silently, archive the chat instead of reacting.
 
 ### Gmail reaction limits
 
+Email room power levels allow reactions at the human user's default level (0). Messages and redactions require level 101; reaction removal remains blocked. Existing email rooms have their power levels refreshed at each startup, with a state event sent only when levels change. The log entry `Email room power level refresh complete` reports `portals`, `updated`, and `failed`. A failed refresh prevents startup after the remaining rooms have been attempted.
+
 The bridge checks the target's current Gmail headers before sending. It posts a refusal notice in the chat when the account address is absent from both To and Cc, List-Id is present, Reply-To differs from From, or To and Cc contain more than 20 distinct recipients. Invalid or multiple emoji are also refused. Reaction removal cannot unsend the email. Gmail can impose additional account or message limits; a send rejection is shown in the chat.
 
 The MIME format follows [Google's email reaction specification](https://developers.google.com/workspace/gmail/reactions/format). A reaction must be exactly one emoji: every rune an emoji rune (mautrix's `emojirunes`) and the whole key one grapheme cluster.
@@ -204,7 +206,7 @@ The MIME format follows [Google's email reaction specification](https://develope
 ### What's not bridged outbound
 
 - Matrix message edits — email can't be unsent. Edits show a status icon, no email is sent.
-- Matrix redactions — email can't be unsent. Redactions only affect the local Matrix copy.
+- Matrix redactions — email can't be unsent. Email room power levels block human redactions.
 - Reactions on accounts without Gmail OAuth, custom Matrix emoji, and reaction removals are not sent as email.
 
 Deployment-specific paths:

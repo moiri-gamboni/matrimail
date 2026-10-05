@@ -37,7 +37,7 @@ func TestStart_BeeperSyncConfig(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			ec := &EmailConnector{Bridge: &bridgev2.Bridge{Log: zerolog.Nop()}}
+			ec := &EmailConnector{Bridge: &bridgev2.Bridge{DB: newTestDB(t), Log: zerolog.Nop()}}
 			ec.Config.BeeperSync = tc.cfg
 			err := ec.Start(context.Background())
 			switch {

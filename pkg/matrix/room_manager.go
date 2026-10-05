@@ -122,7 +122,7 @@ return chatInfo, nil
 }
 
 // BuildReadOnlyPowerLevels centralizes the power level configuration for email threads.
-// - Human user at PL 0 (default) is blocked from sending messages/reactions/redactions
+// - Human user at PL 0 (default) can react but cannot send messages or redactions
 // - State changes require PL 101 (effectively bot/bridge-controlled)
 // - The bridge bot may still be given elevated PL separately by the framework
 func BuildReadOnlyPowerLevels() *bridgev2.PowerLevelOverrides {
@@ -139,8 +139,8 @@ func BuildReadOnlyPowerLevels() *bridgev2.PowerLevelOverrides {
 			event.StateRoomAvatar: 101,
 			// Block all users from sending messages - bridge framework handles ghost sending
 			event.EventMessage:    101,
-			// Keep reactions/redactions restricted to prevent Matrix-side edits by default
-			event.EventReaction:   101,
+			// Email reactions cannot be withdrawn, so redactions remain blocked.
+			event.EventReaction:   0,
 			event.EventRedaction:  101,
 		},
 	}

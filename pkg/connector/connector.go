@@ -457,7 +457,10 @@ func (ec *EmailConnector) createCommands() []commands.CommandHandler {
 
 func (ec *EmailConnector) Start(ctx context.Context) error {
 	ec.Bridge.Log.Info().Msg("Email connector starting...")
-	return ec.Config.BeeperSync.validate()
+	if err := ec.Config.BeeperSync.validate(); err != nil {
+		return err
+	}
+	return ec.refreshRoomPowerLevels(ctx)
 }
 
 // Stop gracefully shuts down the EmailConnector and all IMAP connections
