@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"fmt"
 	"net/mail"
 	"regexp"
 	"strings"
@@ -309,43 +310,47 @@ func isForwardedMessage(email *ParsedEmail) bool {
 }
 
 // DetermineThread analyzes an email and determines which thread it belongs to
-func (tm *ThreadManager) DetermineThread(receiver string, email *ParsedEmail) *EmailThread {
+func (tm *ThreadManager) DetermineThread(receiver string, email *ParsedEmail) (*EmailThread, error) {
 	if email.GmailThreadID != "" {
 		if thread := tm.findByGmailThreadID(receiver, email.GmailThreadID); thread != nil {
-			return tm.addToExistingThread(thread, email)
+			return tm.addToExistingThread(thread, email), nil
 		}
 		if resolver, ok := tm.resolver.(interface {
-			ResolveGmailThreadID(string, string) (string, bool)
+			ResolveGmailThreadID(string, string) (string, bool, error)
 		}); ok {
-			if tid, found := resolver.ResolveGmailThreadID(receiver, email.GmailThreadID); found {
-				return tm.addToExistingThread(&EmailThread{ThreadID: tid, Subject: email.Subject}, email)
+			tid, found, err := resolver.ResolveGmailThreadID(receiver, email.GmailThreadID)
+			if err != nil {
+				return nil, fmt.Errorf("resolve Gmail thread %s: %w", email.GmailThreadID, err)
+			}
+			if found {
+				return tm.addToExistingThread(&EmailThread{ThreadID: tid, Subject: email.Subject}, email), nil
 			}
 		}
-		return tm.createNewThread(email)
+		return tm.createNewThread(email), nil
 	}
 
 	// Forwarded emails always create new threads to avoid contaminating existing conversations
 	if isForwardedMessage(email) {
-		return tm.createNewThread(email)
+		return tm.createNewThread(email), nil
 	}
 	// Step 0a: Consult external resolver if available
 	if tm.resolver != nil {
 		if email.InReplyTo != "" {
 			if tid, ok := tm.resolver.ResolveThreadID(receiver, email.InReplyTo); ok && tid != "" {
 				if thread := tm.getCachedThread(receiver, tid); thread != nil {
-					return tm.addToExistingThread(thread, email)
+					return tm.addToExistingThread(thread, email), nil
 				}
 				thread := &EmailThread{ThreadID: tid, Subject: email.Subject}
-				return tm.addToExistingThread(thread, email)
+				return tm.addToExistingThread(thread, email), nil
 			}
 		}
 		for _, refID := range email.References {
 			if tid, ok := tm.resolver.ResolveThreadID(receiver, refID); ok && tid != "" {
 				if thread := tm.getCachedThread(receiver, tid); thread != nil {
-					return tm.addToExistingThread(thread, email)
+					return tm.addToExistingThread(thread, email), nil
 				}
 				thread := &EmailThread{ThreadID: tid, Subject: email.Subject}
-				return tm.addToExistingThread(thread, email)
+				return tm.addToExistingThread(thread, email), nil
 			}
 		}
 	}
@@ -353,7 +358,7 @@ func (tm *ThreadManager) DetermineThread(receiver string, email *ParsedEmail) *E
 	// Step 1: Check if this is a reply based on In-Reply-To header (in-memory)
 	if email.InReplyTo != "" {
 		if thread := tm.findThreadByMessageID(email.InReplyTo); thread != nil {
-			return tm.addToExistingThread(thread, email)
+			return tm.addToExistingThread(thread, email), nil
 		}
 	}
 
@@ -362,13 +367,13 @@ func (tm *ThreadManager) DetermineThread(receiver string, email *ParsedEmail) *E
 		// Check each reference (starting from the oldest)
 		for _, refID := range email.References {
 			if thread := tm.findThreadByMessageID(refID); thread != nil {
-				return tm.addToExistingThread(thread, email)
+				return tm.addToExistingThread(thread, email), nil
 			}
 		}
 	}
 
 	// Step 3: This is a new thread (subject-based threading removed to prevent false positives)
-	return tm.createNewThread(email)
+	return tm.createNewThread(email), nil
 }
 
 // findThreadByMessageID finds an existing thread that contains a specific Message-ID

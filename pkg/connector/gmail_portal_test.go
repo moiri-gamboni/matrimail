@@ -43,8 +43,21 @@ func TestGmailPortalResolverAndSyncUseOldestRoom(t *testing.T) {
 	}
 	log := zerolog.Nop()
 	r := &DBThreadMetadataResolver{Bridge: &bridgev2.Bridge{DB: db}, Log: &log}
-	got, ok := r.ResolveGmailThreadID(testLoginID, "gmail")
-	if !ok || got != "old" {
+	got, ok, err := r.ResolveGmailThreadID(testLoginID, "gmail")
+	if err != nil || !ok || got != "old" {
 		t.Fatalf("resolved %q, %v", got, ok)
+	}
+}
+
+func TestGmailPortalResolverPropagatesDatabaseError(t *testing.T) {
+	db := newTestDB(t)
+	if _, err := db.Exec(context.Background(), "DROP TABLE portal"); err != nil {
+		t.Fatal(err)
+	}
+	log := zerolog.Nop()
+	r := &DBThreadMetadataResolver{Bridge: &bridgev2.Bridge{DB: db}, Log: &log}
+	got, found, err := r.ResolveGmailThreadID(testLoginID, "gmail")
+	if err == nil || found || got != "" {
+		t.Fatalf("lookup: got=%q found=%v error=%v", got, found, err)
 	}
 }

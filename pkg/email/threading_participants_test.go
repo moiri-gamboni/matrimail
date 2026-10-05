@@ -104,7 +104,10 @@ func TestDetermineThread_GmailThreadIDFallback(t *testing.T) {
 		References:    nil,
 		GmailThreadID: "g1",
 	}
-	got := tm.DetermineThread("email:antoine@haply.co", fresh)
+	got, err := tm.DetermineThread("email:antoine@haply.co", fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got == nil {
 		t.Fatalf("DetermineThread returned nil; expected existing thread")
 	}

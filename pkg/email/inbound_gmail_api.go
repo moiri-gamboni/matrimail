@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Leicas/matrimail/pkg/logging"
 	"github.com/rs/zerolog"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/googleapi"
@@ -72,8 +74,7 @@ type GmailHistoryPoller struct {
 	CursorSave func(ctx context.Context, historyID uint64) error
 
 	// OnMessage is called for each newly-discovered message, after a
-	// users.messages.get(format=full) round-trip. Errors are logged but don't
-	// stop the poller. Required.
+	// users.messages.get(format=full) round-trip. Errors hold the cursor. Required.
 	OnMessage func(ctx context.Context, msg *gmail.Message, mailbox string) error
 
 	// OnThreadsChanged, when set, receives the Gmail thread IDs whose archived
@@ -83,6 +84,9 @@ type GmailHistoryPoller struct {
 	// poller makes no call for it.
 	OnThreadsChanged func(ctx context.Context, threadIDs []string) error
 
+	// OnSkip reports a message that failed for thirty minutes.
+	OnSkip func(context.Context, *gmail.Message, error)
+
 	Log *zerolog.Logger
 
 	// clientOptions are appended when building the Gmail service; tests use
@@ -90,6 +94,10 @@ type GmailHistoryPoller struct {
 	clientOptions []option.ClientOption
 
 	// Internal state.
+	now          func() time.Time
+	failingSince map[string]time.Time
+	// The oldest label cursor can replay a skip even after a successful save.
+	skipped  map[string]bool
 	stopOnce sync.Once
 	stopCh   chan struct{}
 }
@@ -271,17 +279,72 @@ func (g *GmailHistoryPoller) pollOnce(ctx context.Context, cursor uint64, logger
 	}
 
 	msgIDs := newMessageIDs(records, g.MonitoredLabelIDs)
+	for msgID := range g.skipped {
+		if !slices.Contains(msgIDs, msgID) {
+			delete(g.skipped, msgID)
+		}
+	}
+	for msgID := range g.failingSince {
+		if !slices.Contains(msgIDs, msgID) {
+			delete(g.failingSince, msgID)
+		}
+	}
 	if len(msgIDs) > 0 {
 		logger.Debug().Int("new_messages", len(msgIDs)).Uint64("from", cursor).Uint64("to", newCursor).
 			Msg("Gmail history poll: fetching new messages")
 	}
 	for _, msgID := range msgIDs {
-		full, err := svc.Users.Messages.Get("me", msgID).Format("full").Context(ctx).Do()
-		if err != nil {
-			logger.Warn().Err(err).Str("gmail_msg_id", msgID).Msg("Failed to fetch Gmail message; skipping")
+		if g.skipped[msgID] {
 			continue
 		}
-		g.feed(ctx, full, logger)
+		logger.Debug().Str("gmail_msg_id", msgID).Str("format", "full").Msg("Gmail messages.get request")
+		full, err := svc.Users.Messages.Get("me", msgID).Format("full").Context(ctx).Do()
+		if err != nil {
+			var apiErr *googleapi.Error
+			if errors.As(err, &apiErr) {
+				logger.Debug().Str("gmail_msg_id", msgID).Int("status", apiErr.Code).Str("response", apiErr.Body).Msg("Gmail messages.get error response")
+				if apiErr.Code == 404 {
+					delete(g.failingSince, msgID)
+					logger.Debug().Str("gmail_msg_id", msgID).Msg("Gmail message no longer exists")
+					continue
+				}
+			}
+			full = &gmail.Message{Id: msgID}
+		} else {
+			err = g.feed(ctx, full, logger)
+		}
+		if err == nil {
+			delete(g.failingSince, msgID)
+			continue
+		}
+		now := time.Now()
+		if g.now != nil {
+			now = g.now()
+		}
+		if g.failingSince == nil {
+			g.failingSince = make(map[string]time.Time)
+		}
+		since, failed := g.failingSince[msgID]
+		if !failed {
+			since = now
+			g.failingSince[msgID] = since
+		}
+		if now.Sub(since) < 30*time.Minute {
+			return cursor, fmt.Errorf("Gmail message %s: %w", msgID, err)
+		}
+		subject := ""
+		if full.Payload != nil {
+			subject = headerValue(full.Payload.Headers, "Subject")
+		}
+		logger.Error().Err(err).Str("gmail_msg_id", msgID).Str("subject", logging.BoundAndClean(logging.RedactEmailsIn(subject), 200)).Msg("Gmail message skipped after repeated failures")
+		if g.OnSkip != nil {
+			g.OnSkip(ctx, full, err)
+		}
+		delete(g.failingSince, msgID)
+		if g.skipped == nil {
+			g.skipped = make(map[string]bool)
+		}
+		g.skipped[msgID] = true
 	}
 
 	// After the messages, so a thread that just gained its first bridged
@@ -405,23 +468,19 @@ func newMessageIDs(records []*gmail.History, monitored []string) []string {
 }
 
 // feed hands a fetched message to OnMessage under the mailbox its own labels
-// put it in, and reports whether it was accepted. The labels come from the
+// put it in, returning any processing error. The labels come from the
 // fetched message because the history.list reference says the messages in
 // history records typically carry only an id and a threadId.
 //
 // Drafts are skipped: they have no stable Message-ID and would appear in
 // Matrix as messages from a third-party ghost. They become visible once sent,
 // when Gmail removes DRAFT.
-func (g *GmailHistoryPoller) feed(ctx context.Context, msg *gmail.Message, logger *zerolog.Logger) bool {
+func (g *GmailHistoryPoller) feed(ctx context.Context, msg *gmail.Message, logger *zerolog.Logger) error {
 	if hasLabel(msg.LabelIds, "DRAFT") {
 		logger.Debug().Str("gmail_msg_id", msg.Id).Msg("Skipping draft message (DRAFT label)")
-		return false
+		return nil
 	}
-	if err := g.OnMessage(ctx, msg, primaryLabel(msg.LabelIds, g.MonitoredLabelIDs)); err != nil {
-		logger.Warn().Err(err).Str("gmail_msg_id", msg.Id).Msg("OnMessage callback failed; continuing")
-		return false
-	}
-	return true
+	return g.OnMessage(ctx, msg, primaryLabel(msg.LabelIds, g.MonitoredLabelIDs))
 }
 
 // Backlog scans the past lookback window for messages bearing any of the
@@ -505,7 +564,9 @@ func (g *GmailHistoryPoller) Backlog(ctx context.Context, lookbackDays int, logg
 
 	fed := 0
 	for _, msg := range msgs {
-		if g.feed(ctx, msg, logger) {
+		if err := g.feed(ctx, msg, logger); err != nil {
+			logger.Warn().Err(err).Str("gmail_msg_id", msg.Id).Msg("Backlog: OnMessage callback failed; skipping")
+		} else if !hasLabel(msg.LabelIds, "DRAFT") {
 			fed++
 		}
 	}

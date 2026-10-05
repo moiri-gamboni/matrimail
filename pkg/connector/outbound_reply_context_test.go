@@ -22,20 +22,26 @@ var selvesForTest = []string{"me@example.com"}
 func TestReplyAfterOwnMessage_AddressesTheOtherParty(t *testing.T) {
 	t.Parallel()
 	tm := email.NewThreadManager(nil)
-	thread := tm.DetermineThread("login-1", &email.ParsedEmail{
+	thread, err := tm.DetermineThread("login-1", &email.ParsedEmail{
 		MessageID: "in-1@example.com",
 		From:      "Alice <alice@example.com>",
 		To:        []string{"me@example.com"},
 		Cc:        []string{"bob@example.com"},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	tm.CacheForReceiver("login-1", thread)
-	thread = tm.DetermineThread("login-1", &email.ParsedEmail{
+	thread, err = tm.DetermineThread("login-1", &email.ParsedEmail{
 		MessageID: "out-1@example.com",
 		InReplyTo: "in-1@example.com",
 		From:      "Me <me@example.com>",
 		To:        []string{"alice@example.com"},
 		Outbound:  true,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	dm, err := resolveDMRecipients(thread, selvesForTest)
 	if err != nil {

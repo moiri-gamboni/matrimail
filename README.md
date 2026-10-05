@@ -374,3 +374,15 @@ After confirming your selection, only emails in those folders will appear in Mat
 AGPL-3.0-or-later. See LICENSE.
 
 Portions derived from mautrix-whatsapp (AGPL-3.0-or-later) by Tulir Asokan and contributors.
+
+## Gmail inbound retries
+
+In Gmail OAuth `modify` mode, a fetch or processing failure holds the history cursor. Later messages wait while the failed message is retried on each poll. A fetch 404 is passed over because the message no longer exists. Gmail thread lookup errors also hold the cursor; a true lookup miss creates a new room.
+
+After 30 minutes of failure, the bridge skips the message, logs `Gmail message skipped after repeated failures` at error level, and sends a management-room notice containing its Gmail ID, subject (when fetched), and error. A restart resets the in-memory failure timer; the saved cursor still retries the message. Failures while listing history do not start a message's timer. Errors after bridgev2 accepts an event and failed attachment downloads are outside this retry path.
+
+### How to recover a skipped email
+
+1. Read the skipped-message notice in the bridge's management room and resolve the reported error.
+2. In that room, run `!matrimail backlog 1` for mail from the past day, or replace `1` with the number of days needed (up to 30). Add an email address to limit the scan to one account: `!matrimail backlog 7 you@example.com`.
+3. Confirm that the email appears in its chat. Inspect the backlog result and bridge logs if it still fails.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,6 +80,21 @@ func (m *GmailInboundManager) Start(ctx context.Context, login *bridgev2.UserLog
 		},
 		OnMessage: func(ctx context.Context, msg *gmail.Message, mailbox string) error {
 			return m.handleMessage(ctx, login, msg, mailbox, attachments.Fetch)
+		},
+		OnSkip: func(ctx context.Context, msg *gmail.Message, err error) {
+			subject := "(unavailable)"
+			if msg.Payload != nil {
+				for _, header := range msg.Payload.Headers {
+					if strings.EqualFold(header.Name, "Subject") {
+						subject = header.Value
+						break
+					}
+				}
+			}
+			notice := fmt.Sprintf("Gmail message skipped after repeated failures: %s\nSubject: %s\nError: %v\nUse backlog <days> to retry it after fixing the failure.", msg.Id, subject, err)
+			if nerr := sendBridgeNotice(ctx, login.User, notice); nerr != nil {
+				logger.Error().Err(nerr).Str("gmail_msg_id", msg.Id).Msg("Failed to send skipped Gmail message notice")
+			}
 		},
 		Log: &logger,
 	}
@@ -222,9 +238,7 @@ func (m *GmailInboundManager) handleMessage(ctx context.Context, login *bridgev2
 	// restart an ordinary typed reply is addressed from recipients this very
 	// message may have dropped.
 	if err := PersistThreadState(ctx, portal, emailMsg.Thread); err != nil {
-		m.connector.Bridge.Log.Warn().Err(err).
-			Str("portal_key", string(emailMsg.PortalKey.ID)).
-			Msg("could not persist thread state on inbound; a restart before the next send will reply from stale recipients")
+		return fmt.Errorf("persist thread state: %w", err)
 	}
 
 	if !login.QueueRemoteEvent(matrixEvent).Success {
@@ -232,4 +246,3 @@ func (m *GmailInboundManager) handleMessage(ctx context.Context, login *bridgev2
 	}
 	return nil
 }
-

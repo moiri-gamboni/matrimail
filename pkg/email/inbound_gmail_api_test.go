@@ -1,6 +1,7 @@
 package email
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"golang.org/x/oauth2"
@@ -365,5 +367,242 @@ func TestPollOnce_ThreadCallbackFailureKeepsTheCursor(t *testing.T) {
 	}
 	if cursor != 100 {
 		t.Errorf("cursor = %d; want 100 kept", cursor)
+	}
+}
+
+func retryFixture() *fakeGmail {
+	return &fakeGmail{history: map[string]string{"INBOX": `{"historyId":"110","history":[{"id":"101","messagesAdded":[{"message":{"id":"a"}},{"message":{"id":"b"}},{"message":{"id":"c"}}]}]}`}, messages: map[string]string{"a": gmailMessage("a", 1000, "INBOX"), "b": gmailMessage("b", 2000, "INBOX"), "c": gmailMessage("c", 3000, "INBOX")}}
+}
+
+func TestPollOnce_RetriesProcessingInOrder(t *testing.T) {
+	g, _ := newTestPoller(t, retryFixture(), "INBOX")
+	var attempts []string
+	fail := true
+	g.OnMessage = func(_ context.Context, m *gmail.Message, _ string) error {
+		attempts = append(attempts, m.Id)
+		if m.Id == "b" && fail {
+			return fmt.Errorf("room unavailable")
+		}
+		return nil
+	}
+	cursor, err := g.pollOnce(context.Background(), 100, g.Log)
+	if err == nil || cursor != 100 || strings.Join(attempts, ",") != "a,b" {
+		t.Fatalf("cursor=%d err=%v attempts=%v", cursor, err, attempts)
+	}
+	fail = false
+	cursor, err = g.pollOnce(context.Background(), 100, g.Log)
+	if err != nil || cursor != 110 || strings.Join(attempts, ",") != "a,b,a,b,c" {
+		t.Fatalf("retry: cursor=%d err=%v attempts=%v", cursor, err, attempts)
+	}
+}
+
+func TestPollOnce_FetchFailureHoldsCursor(t *testing.T) {
+	f := retryFixture()
+	g, got := newTestPoller(t, f, "INBOX")
+	f.messages["b"] = `{"error":{"code":403,"message":"Forbidden"}}`
+	// Inject an actual HTTP failure rather than a successful JSON message.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/b") {
+			w.WriteHeader(403)
+			fmt.Fprint(w, f.messages["b"])
+			return
+		}
+		f.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	g.clientOptions = []option.ClientOption{option.WithEndpoint(srv.URL + "/")}
+	cursor, err := g.pollOnce(context.Background(), 100, g.Log)
+	if err == nil || cursor != 100 || fmt.Sprint(*got) != fmt.Sprint([]fed{{"a", "INBOX"}}) {
+		t.Fatalf("cursor=%d err=%v fed=%v", cursor, err, *got)
+	}
+}
+
+func TestPollOnce_GoneMessageDoesNotHoldCursor(t *testing.T) {
+	f := retryFixture()
+	delete(f.messages, "b")
+	g, got := newTestPoller(t, f, "INBOX")
+	cursor, err := g.pollOnce(context.Background(), 100, g.Log)
+	if err != nil || cursor != 110 || fmt.Sprint(*got) != fmt.Sprint([]fed{{"a", "INBOX"}, {"c", "INBOX"}}) {
+		t.Fatalf("cursor=%d err=%v fed=%v", cursor, err, *got)
+	}
+}
+
+func TestPollOnce_SkipsAfterThirtyMinutes(t *testing.T) {
+	g, _ := newTestPoller(t, retryFixture(), "INBOX")
+	now := time.Unix(1000, 0)
+	g.now = func() time.Time { return now }
+	var notices []string
+	g.OnSkip = func(_ context.Context, m *gmail.Message, err error) { notices = append(notices, m.Id+":"+err.Error()) }
+	var logs bytes.Buffer
+	log := zerolog.New(&logs)
+	var got []string
+	g.OnMessage = func(_ context.Context, m *gmail.Message, _ string) error {
+		if m.Id == "b" {
+			return fmt.Errorf("room unavailable")
+		}
+		got = append(got, m.Id)
+		return nil
+	}
+	for _, age := range []time.Duration{0, 29 * time.Minute} {
+		now = time.Unix(1000, 0).Add(age)
+		cursor, err := g.pollOnce(context.Background(), 100, &log)
+		if err == nil || cursor != 100 || len(notices) != 0 {
+			t.Fatalf("before deadline: cursor=%d err=%v notices=%v", cursor, err, notices)
+		}
+	}
+	now = time.Unix(1000, 0).Add(30 * time.Minute)
+	cursor, err := g.pollOnce(context.Background(), 100, &log)
+	if err != nil || cursor != 110 || strings.Join(got, ",") != "a,a,a,c" || fmt.Sprint(notices) != "[b:room unavailable]" {
+		t.Fatalf("skip: cursor=%d err=%v got=%v notices=%v", cursor, err, got, notices)
+	}
+	if strings.Count(logs.String(), "Gmail message skipped after repeated failures") != 1 || !strings.Contains(logs.String(), `"level":"error"`) {
+		t.Fatalf("skip log: %s", logs.String())
+	}
+}
+
+func TestPollOnce_SkipIsRememberedUntilCursorAdvances(t *testing.T) {
+	g, _ := newTestPoller(t, retryFixture(), "INBOX")
+	now := time.Unix(1000, 0)
+	g.now = func() time.Time { return now }
+	failC := false
+	notices := 0
+	g.OnSkip = func(context.Context, *gmail.Message, error) { notices++ }
+	g.OnMessage = func(_ context.Context, m *gmail.Message, _ string) error {
+		if m.Id == "b" || (m.Id == "c" && failC) {
+			return fmt.Errorf("room unavailable")
+		}
+		return nil
+	}
+	_, _ = g.pollOnce(context.Background(), 100, g.Log)
+	now = now.Add(30 * time.Minute)
+	failC = true
+	_, err := g.pollOnce(context.Background(), 100, g.Log)
+	if err == nil || notices != 1 {
+		t.Fatalf("first skip: error=%v notices=%d", err, notices)
+	}
+	failC = false
+	cursor, err := g.pollOnce(context.Background(), 100, g.Log)
+	if err != nil || cursor != 110 || notices != 1 {
+		t.Fatalf("replayed skip: cursor=%d error=%v notices=%d", cursor, err, notices)
+	}
+}
+
+func TestPollOnce_ListingOutageDoesNotAgeMessageFailure(t *testing.T) {
+	f := retryFixture()
+	g, got := newTestPoller(t, f, "INBOX")
+	outage := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if outage {
+			w.WriteHeader(401)
+			fmt.Fprint(w, `{"error":{"code":401,"message":"Unauthorized"}}`)
+			return
+		}
+		f.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	g.clientOptions = []option.ClientOption{option.WithEndpoint(srv.URL + "/")}
+	now := time.Unix(1000, 0)
+	g.now = func() time.Time { return now }
+	for _, age := range []time.Duration{0, 40 * time.Minute} {
+		now = time.Unix(1000, 0).Add(age)
+		cursor, err := g.pollOnce(context.Background(), 100, g.Log)
+		if err == nil || cursor != 100 || len(*got) > 0 || len(g.failingSince) > 0 {
+			t.Fatalf("outage: cursor=%d error=%v fed=%v failures=%v", cursor, err, *got, g.failingSince)
+		}
+	}
+	outage = false
+	cursor, err := g.pollOnce(context.Background(), 100, g.Log)
+	if err != nil || cursor != 110 || len(*got) != 3 {
+		t.Fatalf("recovery: cursor=%d error=%v fed=%v", cursor, err, *got)
+	}
+}
+
+func TestPollOnce_RestartRetriesFromSavedCursor(t *testing.T) {
+	f := retryFixture()
+	g, _ := newTestPoller(t, f, "INBOX")
+	g.OnMessage = func(context.Context, *gmail.Message, string) error { return fmt.Errorf("database locked") }
+	cursor, err := g.pollOnce(context.Background(), 100, g.Log)
+	if err == nil || cursor != 100 {
+		t.Fatalf("failure: cursor=%d error=%v", cursor, err)
+	}
+	restarted, got := newTestPoller(t, f, "INBOX")
+	cursor, err = restarted.pollOnce(context.Background(), cursor, restarted.Log)
+	if err != nil || cursor != 110 || len(*got) != 3 {
+		t.Fatalf("restart: cursor=%d error=%v fed=%v", cursor, err, *got)
+	}
+}
+
+func TestRun_SavesCursorOnlyAfterMessageRecovery(t *testing.T) {
+	g, _ := newTestPoller(t, retryFixture(), "INBOX")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g.PollInterval = time.Millisecond
+	g.CursorLoad = func(context.Context) (uint64, error) { return 100, nil }
+	var saved []uint64
+	g.CursorSave = func(_ context.Context, c uint64) error { saved = append(saved, c); cancel(); return nil }
+	attempts := 0
+	var seen []string
+	g.OnMessage = func(_ context.Context, m *gmail.Message, _ string) error {
+		seen = append(seen, m.Id)
+		if m.Id == "b" {
+			attempts++
+			if attempts == 1 {
+				return fmt.Errorf("room unavailable")
+			}
+			if len(saved) != 0 {
+				t.Fatal("saved failed tick")
+			}
+		}
+		return nil
+	}
+	timeout := time.AfterFunc(5*time.Second, cancel)
+	defer timeout.Stop()
+	_ = g.Run(ctx)
+	if fmt.Sprint(saved) != "[110]" || strings.Join(seen, ",") != "a,b,a,b,c" {
+		t.Fatalf("saved=%v seen=%v", saved, seen)
+	}
+}
+
+func TestRun_RemembersSkipAcrossConservativeLabelCursor(t *testing.T) {
+	f := retryFixture()
+	f.history["INBOX"] = `{"historyId":"110","history":[]}`
+	f.history["SENT"] = `{"historyId":"120","history":[{"id":"115","messagesAdded":[{"message":{"id":"b"}}]}]}`
+	g, _ := newTestPoller(t, f, "INBOX", "SENT")
+	now := time.Unix(1000, 0)
+	g.now = func() time.Time { return now }
+	g.OnMessage = func(context.Context, *gmail.Message, string) error {
+		now = time.Unix(1000, 0).Add(30 * time.Minute)
+		return fmt.Errorf("room unavailable")
+	}
+	// First failure starts at zero; subsequent polls reach the deadline.
+	calls := 0
+	g.now = func() time.Time {
+		calls++
+		if calls == 1 {
+			return time.Unix(1000, 0)
+		}
+		return now
+	}
+	notices := 0
+	g.OnSkip = func(context.Context, *gmail.Message, error) { notices++ }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g.PollInterval = time.Millisecond
+	g.CursorLoad = func(context.Context) (uint64, error) { return 100, nil }
+	var saved []uint64
+	g.CursorSave = func(_ context.Context, c uint64) error {
+		saved = append(saved, c)
+		if c == 110 {
+			f.history["INBOX"] = `{"historyId":"120","history":[]}`
+		} else {
+			cancel()
+		}
+		return nil
+	}
+	timeout := time.AfterFunc(time.Second, cancel)
+	defer timeout.Stop()
+	_ = g.Run(ctx)
+	if fmt.Sprint(saved) != "[110 120]" || notices != 1 {
+		t.Fatalf("saved=%v notices=%d", saved, notices)
 	}
 }
