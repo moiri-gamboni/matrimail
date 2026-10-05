@@ -15,7 +15,6 @@ import (
 	"net/http/httptest"
 	"net/mail"
 	"os"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -126,13 +125,8 @@ func TestGmailReactionSendsOnceInTargetThread(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/threads/"+target.ThreadId):
-			if r.URL.Query().Get("format") != "metadata" {
-				t.Error("target fetched without metadata format")
-			}
-			for _, name := range []string{"To", "Cc", "Reply-To", "List-Id", "From", "Message-ID", "References"} {
-				if !slices.Contains(r.URL.Query()["metadataHeaders"], name) {
-					t.Errorf("missing requested header %s", name)
-				}
+			if r.URL.Query().Get("format") != "full" {
+				t.Error("target fetched without full format")
 			}
 			json.NewEncoder(w).Encode(&gmail.Thread{Id: target.ThreadId, Messages: []*gmail.Message{target}})
 		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/messages/send"):
@@ -158,6 +152,10 @@ func TestGmailReactionSendsOnceInTargetThread(t *testing.T) {
 			io.WriteString(w, `{"id":"sent-reaction"}`)
 		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/messages/sent-reaction"):
 			io.WriteString(w, `{"payload":{"headers":[{"name":"Message-ID","value":"<reaction@example.com>"}]}}`)
+		case strings.HasSuffix(r.URL.Path, "/messages/sent-reaction/trash"):
+			io.WriteString(w, `{"id":"sent-reaction","labelIds":["TRASH","SENT"]}`)
+		case strings.HasSuffix(r.URL.Path, "/messages/import"):
+			io.WriteString(w, `{"id":"imported","labelIds":["SENT"]}`)
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(500)
@@ -168,7 +166,7 @@ func TestGmailReactionSendsOnceInTargetThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mid, err := sendGmailReaction(context.Background(), svc, target.ThreadId, cleanMessageID(headerValue(target.Payload.Headers, "Message-ID")), mail.Address{Address: "sam@example.com"}, "✅")
+	mid, err := sendGmailReaction(context.Background(), svc, target.ThreadId, cleanMessageID(headerValue(target.Payload.Headers, "Message-ID")), mail.Address{Address: "sam@example.com"}, "✅", nil)
 	if err != nil || mid != "reaction@example.com" || sends != 1 {
 		t.Fatalf("mid=%q sends=%d err=%v", mid, sends, err)
 	}
@@ -251,11 +249,11 @@ func TestGmailReactionQualifiesEmojiInAllParts(t *testing.T) {
 						t.Errorf("payload emoji = %q, want %q", reaction.Emoji, tc.want)
 					}
 				} else {
-					want := "sam@example.com reacted via Gmail: " + tc.want
+					want := tc.want + "\n\n" + "sam@example.com reacted via Gmail\n"
 					if kind == "text/html" {
-						want = "<p>" + want + "</p>"
+						want = `<div><p style="font-size:50px;margin-top:0;margin-bottom:0">` + tc.want + `</p>`
 					}
-					if string(body) != want {
+					if !strings.HasPrefix(strings.ReplaceAll(string(body), "\r\n", "\n"), want) {
 						t.Errorf("fallback = %q, want %q", body, want)
 					}
 				}
@@ -305,7 +303,7 @@ func TestGmailReactionUsesNamedFromAndQuotedPrintableFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	reader := multipart.NewReader(msg.Body, params["boundary"])
-	for _, want := range []string{"Émile & Sam reacted via Gmail: ✅", `{"version":1,"emoji":"✅"}`, "<p>Émile &amp; Sam reacted via Gmail: ✅</p>"} {
+	for _, want := range []string{"✅\n\nÉmile & Sam reacted via Gmail\n", `{"version":1,"emoji":"✅"}`, `<div><p style="font-size:50px;margin-top:0;margin-bottom:0">✅</p><p style="margin-top:10px;margin-bottom:0">Émile &amp; Sam reacted via <a href=`} {
 		part, err := reader.NextRawPart()
 		if err != nil {
 			t.Fatal(err)
@@ -317,8 +315,62 @@ func TestGmailReactionUsesNamedFromAndQuotedPrintableFallback(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(body) != want {
+		if !strings.HasPrefix(strings.ReplaceAll(string(body), "\r\n", "\n"), want) {
 			t.Errorf("decoded body = %q, want %q", body, want)
 		}
+	}
+}
+
+func TestGmailReactionFallbackQuotesTheSelectedTarget(t *testing.T) {
+	target := reactionTarget(t)
+	target.Payload.Headers = append(target.Payload.Headers, &gmail.MessagePartHeader{Name: "Date", Value: "Mon, 5 Oct 2026 09:55:00 +0000"})
+	target.Payload.Parts = []*gmail.MessagePart{
+		{MimeType: "text/plain", Body: &gmail.MessagePartBody{Data: base64.RawURLEncoding.EncodeToString([]byte("Original <&> text\n"))}},
+		{MimeType: "text/html", Body: &gmail.MessagePartBody{Data: base64.RawURLEncoding.EncodeToString([]byte("<b>Original &amp; text</b>"))}},
+	}
+	raw, err := BuildGmailReaction(target, mail.Address{Name: "Sam & Example", Address: "sam@example.com"}, "👍")
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, params, _ := mime.ParseMediaType(message.Header.Get("Content-Type"))
+	reader := multipart.NewReader(message.Body, params["boundary"])
+	plain, _ := reader.NextPart()
+	text, _ := io.ReadAll(plain)
+	if !strings.HasPrefix(strings.ReplaceAll(string(text), "\r\n", "\n"), "👍\n\nSam & Example reacted via Gmail\n<https://www.google.com/gmail/about/?utm_source=gmail-in-product&utm_medium=et&utm_campaign=emojireactionemail#app>\n\nOn Mon, Oct 5, 2026 at 9:55 AM") || !strings.Contains(string(text), "> Original <&> text") {
+		t.Errorf("plain fallback=%s", text)
+	}
+	reader.NextPart()
+	htmlPart, _ := reader.NextPart()
+	htmlBody, _ := io.ReadAll(htmlPart)
+	for _, want := range []string{`font-size:50px;margin-top:0;margin-bottom:0`, `Sam &amp; Example reacted via <a href=`, `gmail_quote gmail_quote_container`, `<b>Original &amp; text</b>`} {
+		if !strings.Contains(string(htmlBody), want) {
+			t.Errorf("HTML missing %s: %s", want, htmlBody)
+		}
+	}
+}
+
+func TestGmailReactionEscapesPlainTextForHTMLQuote(t *testing.T) {
+	target := reactionTarget(t)
+	target.Payload.Parts = []*gmail.MessagePart{{MimeType: "text/plain", Body: &gmail.MessagePartBody{Data: base64.RawURLEncoding.EncodeToString([]byte("<script>&quoted</script>"))}}}
+	raw, err := BuildGmailReaction(target, mail.Address{Name: "<Sender>", Address: "sam@example.com"}, "👍")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, _ := mail.ReadMessage(bytes.NewReader(raw))
+	_, params, _ := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	parts := multipart.NewReader(msg.Body, params["boundary"])
+	parts.NextPart()
+	parts.NextPart()
+	htmlPart, err := parts.NextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(htmlPart)
+	if !strings.Contains(string(body), "&lt;script&gt;&amp;quoted&lt;/script&gt;") || strings.Contains(string(body), "<script>") || !strings.Contains(string(body), "&lt;Sender&gt;") {
+		t.Errorf("unsafe HTML fallback: %s", body)
 	}
 }

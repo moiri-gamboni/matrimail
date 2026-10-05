@@ -15,7 +15,7 @@ import (
 )
 
 type gmailReactor interface {
-	React(context.Context, string, string, mail.Address, string) (string, error)
+	React(context.Context, string, string, mail.Address, string, func(string)) (string, error)
 }
 
 var _ bridgev2.ReactionHandlingNetworkAPI = (*EmailClient)(nil)
@@ -27,17 +27,12 @@ func (ec *EmailClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev
 }
 
 func (ec *EmailClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (*database.Reaction, error) {
-	sentID, err := ec.sendReaction(ctx, msg)
+	_, err := ec.sendReaction(ctx, msg)
 	if err != nil {
 		if noticeErr := postErrorToPortal(ctx, ec.UserLogin.Bridge, msg.Portal, "Reaction refused", err.Error()); noticeErr != nil {
 			return nil, fmt.Errorf("%w (could not post refusal notice: %v)", err, noticeErr)
 		}
 		return nil, err
-	}
-	if sentID != "" && ec.Main.SentDedup != nil {
-		if err := ec.Main.SentDedup.Record(ctx, string(ec.UserLogin.ID), sentID, string(msg.Event.ID)); err != nil {
-			ec.UserLogin.Log.Warn().Err(err).Msg("Reaction sent but echo suppression could not be recorded")
-		}
 	}
 	return &database.Reaction{Emoji: variationselector.FullyQualify(msg.Content.RelatesTo.Key)}, nil
 }
@@ -63,8 +58,14 @@ func (ec *EmailClient) sendReaction(ctx context.Context, msg *bridgev2.MatrixRea
 	for _, alias := range ec.SendAsAliases {
 		selves[strings.ToLower(alias.Email)] = true
 	}
-	fromAddr, fromName := pickFromAddress(ec, thread, selves)
-	return reactor.React(ctx, thread.GmailThreadID, common.MessageIDFromNetworkID(msg.TargetMessage.ID), mail.Address{Address: fromAddr, Name: fromName}, variationselector.FullyQualify(msg.Content.RelatesTo.Key))
+	fromAddr, fromName := pickFromAddress(ctx, ec, thread, selves)
+	return reactor.React(ctx, thread.GmailThreadID, common.MessageIDFromNetworkID(msg.TargetMessage.ID), mail.Address{Address: fromAddr, Name: fromName}, variationselector.FullyQualify(msg.Content.RelatesTo.Key), func(messageID string) {
+		if ec.Main.SentDedup != nil {
+			if err := ec.Main.SentDedup.Record(ctx, string(ec.UserLogin.ID), messageID, string(msg.Event.ID)); err != nil {
+				ec.UserLogin.Log.Error().Err(err).Str("message_id", messageID).Msg("Reaction sent but echo suppression could not be recorded")
+			}
+		}
+	})
 }
 
 func (ec *EmailClient) HandleMatrixReactionRemove(ctx context.Context, msg *bridgev2.MatrixReactionRemove) error {

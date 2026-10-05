@@ -27,6 +27,7 @@ import (
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
+	bridgematrix "maunium.net/go/mautrix/bridgev2/matrix"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
 
@@ -122,7 +123,7 @@ func (ec *EmailClient) handleMatrixMessageOutbound(ctx context.Context, msg *bri
 
 	// Pick From: the alias the most recent inbound was addressed to wins
 	// (when it's known and is one of our addresses); otherwise the primary.
-	fromAddr, fromName := pickFromAddressFromSlice(ec, thread, selves)
+	fromAddr, fromName := pickFromAddressFromSlice(ctx, ec, thread, selves)
 	om := buildOutgoingMessage(fromAddr, fromName, thread, msg, inReplyTo, references, to, cc, ec.Main.Config.location)
 	// Append the user's Gmail-side signature on NEW threads only, matching
 	// the Gmail web UI's "include signature on first message in thread"
@@ -454,30 +455,39 @@ func parseAddrIfAllowed(raw string, selves, seen map[string]bool) (addr netmail.
 // pickFromAddress returns (address, displayName) for the outbound From
 // header. Prefers thread.LastDeliveredTo when it matches one of the user's
 // aliases; otherwise falls back to the primary address. Display name is
-// pulled from the matching SendAsAliases entry when available.
-func pickFromAddress(ec *EmailClient, thread *email.EmailThread, selves map[string]bool) (string, string) {
-	primary := ec.Email
-	if thread == nil || strings.TrimSpace(thread.LastDeliveredTo) == "" {
-		return primary, ""
-	}
-	want := strings.ToLower(strings.TrimSpace(thread.LastDeliveredTo))
-	if !selves[want] {
-		return primary, ""
-	}
-	for _, sa := range ec.SendAsAliases {
-		if strings.EqualFold(sa.Email, want) {
-			return sa.Email, sa.Name
+// pulled from the matching SendAsAliases entry, then the Matrix profile.
+func pickFromAddress(ctx context.Context, ec *EmailClient, thread *email.EmailThread, selves map[string]bool) (string, string) {
+	address := ec.Email
+	if thread != nil {
+		want := strings.ToLower(strings.TrimSpace(thread.LastDeliveredTo))
+		if want != "" && selves[want] {
+			address = thread.LastDeliveredTo
 		}
 	}
-	// Alias matched the primary or wasn't in the SendAsAliases list; still
-	// honor the address but with no display name override.
-	return thread.LastDeliveredTo, ""
+	name := ""
+	for _, alias := range ec.SendAsAliases {
+		if strings.EqualFold(alias.Email, address) {
+			address, name = alias.Email, alias.Name
+			break
+		}
+	}
+	if name == "" && ec.UserLogin != nil {
+		if bot, ok := ec.UserLogin.Bridge.Bot.(*bridgematrix.ASIntent); ok {
+			profile, err := bot.Matrix.GetDisplayName(ctx, ec.UserLogin.UserMXID)
+			if err != nil {
+				ec.UserLogin.Log.Warn().Err(err).Msg("Could not get Matrix display name for email sender")
+			} else if profile != nil {
+				name = profile.DisplayName
+			}
+		}
+	}
+	return address, name
 }
 
 // pickFromAddress overloads via slice-of-strings selves to match the call
 // site that builds a slice rather than a map.
-func pickFromAddressFromSlice(ec *EmailClient, thread *email.EmailThread, selves []string) (string, string) {
-	return pickFromAddress(ec, thread, selvesSet(selves))
+func pickFromAddressFromSlice(ctx context.Context, ec *EmailClient, thread *email.EmailThread, selves []string) (string, string) {
+	return pickFromAddress(ctx, ec, thread, selvesSet(selves))
 }
 
 // buildOutgoingMessage assembles the OutgoingMessage from the Matrix event

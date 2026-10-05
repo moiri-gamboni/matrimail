@@ -5,12 +5,18 @@ import (
 	"fmt"
 	"github.com/Leicas/matrimail/pkg/email"
 	"github.com/rs/zerolog"
+	gmail "google.golang.org/api/gmail/v1"
+	"io"
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/appservice"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
+	bridgematrix "maunium.net/go/mautrix/bridgev2/matrix"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
+	"net/http"
+	"net/http/httptest"
 	"net/mail"
 	"strings"
 	"testing"
@@ -22,14 +28,21 @@ type reactionSender struct {
 	calls                 int
 	thread, target, emoji string
 	own                   mail.Address
+	copyMessageID         string
 }
 
-func (s *reactionSender) React(ctx context.Context, thread, target string, own mail.Address, emoji string) (string, error) {
+func (s *reactionSender) React(ctx context.Context, thread, target string, own mail.Address, emoji string, record func(string)) (string, error) {
 	s.calls++
 	s.thread = thread
 	s.target = target
 	s.own = own
 	s.emoji = emoji
+	if record != nil {
+		record("reaction@example.com")
+		if s.copyMessageID != "" {
+			record(s.copyMessageID)
+		}
+	}
 	return "reaction@example.com", nil
 }
 
@@ -176,6 +189,79 @@ func TestActionsInSplitRoomPreserveGmailRouting(t *testing.T) {
 					t.Fatalf("inbound Gmail mail routed to %s after %s in split room", thread.ThreadID, action)
 				}
 			})
+		}
+	}
+}
+
+func TestReplyFromNameFallsBackToMatrixProfile(t *testing.T) {
+	for _, displayName := range []string{"", "Configured name"} {
+		t.Run(displayName, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if !strings.HasSuffix(r.URL.Path, "/profile/@human:example.com/displayname") {
+					t.Errorf("wrong profile: %s", r.URL)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, `{"displayname":"Matrix Name"}`)
+			}))
+			defer server.Close()
+			api, err := mautrix.NewClient(server.URL, "@bot:example.com", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			bot := &bridgematrix.ASIntent{Matrix: &appservice.IntentAPI{Client: api}}
+			log := zerolog.Nop()
+			client := &EmailClient{Email: "me@example.com", SendAsAliases: []email.GmailSendAs{{Email: "me@example.com", Name: displayName}}, UserLogin: &bridgev2.UserLogin{Bridge: &bridgev2.Bridge{Bot: bot}, Log: log, UserLogin: &database.UserLogin{UserMXID: "@human:example.com"}}}
+			addr, name := pickFromAddress(context.Background(), client, &email.EmailThread{LastDeliveredTo: "me@example.com"}, map[string]bool{"me@example.com": true})
+			want := "Matrix Name"
+			if displayName != "" {
+				want = displayName
+			}
+			if addr != "me@example.com" || name != want {
+				t.Errorf("From=%s %q want %q", addr, name, want)
+			}
+			if displayName != "" && requests != 0 {
+				t.Error("looked up profile when send-as name was set")
+			}
+		})
+	}
+}
+
+func TestReactionRecordsBothCopiesBeforeHistoryCallback(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	store := &SentDedupQuery{DB: db, BridgeID: string(testBridgeID)}
+	if err := store.CreateTable(ctx); err != nil {
+		t.Fatal(err)
+	}
+	tm := email.NewThreadManager(nil)
+	tm.CacheForReceiver("email:me@example.com", &email.EmailThread{ThreadID: "root", GmailThreadID: "gmail"})
+	log := zerolog.Nop()
+	main := &EmailConnector{Bridge: &bridgev2.Bridge{DB: db}, ThreadManager: tm, SentDedup: store}
+	main.Processor = email.NewProcessor(&log, tm, false, "")
+	main.Processor.SetDedupChecker(&dedupAdapter{store: store})
+	client := &EmailClient{Main: main, UserLogin: &bridgev2.UserLogin{Bridge: main.Bridge, Log: log, UserLogin: &database.UserLogin{ID: "email:me@example.com"}}, Email: "me@example.com", Sender: &reactionSender{copyMessageID: "copy@example.com"}}
+	reaction := &bridgev2.MatrixReaction{TargetMessage: &database.Message{ID: "email:target@example.com"}}
+	reaction.Event = &event.Event{ID: "$reaction"}
+	reaction.Portal = &bridgev2.Portal{Portal: &database.Portal{PortalKey: networkid.PortalKey{ID: "thread:root", Receiver: "email:me@example.com"}}}
+	reaction.Content = &event.ReactionEventContent{RelatesTo: event.RelatesTo{Key: "👍"}}
+	if _, err := client.HandleMatrixReaction(ctx, reaction); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewGmailInboundManager(main)
+	for _, mid := range []string{"reaction@example.com", "copy@example.com"} {
+		found, err := store.Exists(ctx, string(client.UserLogin.ID), mid)
+		if err != nil || !found {
+			t.Fatalf("dedup %s missing: %v", mid, err)
+		}
+		labels := []string{"SENT"}
+		if mid == "reaction@example.com" {
+			labels = append(labels, "TRASH")
+		}
+		message := &gmail.Message{Id: mid, ThreadId: "gmail", LabelIds: labels, Payload: &gmail.MessagePart{MimeType: "text/plain", Headers: []*gmail.MessagePartHeader{{Name: "Message-ID", Value: "<" + mid + ">"}, {Name: "From", Value: "Sam <me@example.com>"}}, Body: &gmail.MessagePartBody{Data: "aGk="}}}
+		if err := manager.handleMessage(ctx, client.UserLogin, message, "SENT", nil); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

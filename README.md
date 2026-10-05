@@ -191,7 +191,9 @@ Once you've connected an account, you can send email from Matrix:
 
 ### Reply with a Gmail reaction
 
-React to an email message in Matrix or Beeper with one Unicode emoji. With Gmail OAuth, matrimail sends a Gmail reaction to that specific message in its Gmail thread. Emoji are converted to their fully-qualified Unicode form before sending (for example, `✅️` becomes `✅`, and `❤` becomes `❤️`). The email uses the same From display name as normal outbound replies and a single `Re: ` subject prefix. Its UTF-8 MIME parts use quoted-printable encoding; plain and HTML fallbacks identify the sender by display name when available. Other mail clients may show a normal “reacted via Gmail” email.
+React to an email message in Matrix or Beeper with one Unicode emoji. With Gmail OAuth, matrimail sends a Gmail reaction to that specific message in its Gmail thread. Emoji are converted to their fully-qualified Unicode form before sending (for example, `✅️` becomes `✅`, and `❤` becomes `❤️`). The email uses the same From display name as normal outbound replies and a single `Re: ` subject prefix. Its UTF-8 MIME parts use quoted-printable encoding. Plain and HTML fallbacks show a prominent emoji, the sender name with a Gmail link, and a quote of the selected target message. The From name comes from the matching send-as identity, falling back to the bridge user's Matrix profile name for reactions and normal outbound replies. If neither name is available, the address is retained. Other mail clients may show a normal “reacted via Gmail” email.
+
+After delivery, the bridge trashes the original sent copy and imports a copy with a fresh Message-ID and the SENT label, so Gmail can recognize the reaction in the sender's own view. This repair is best effort: a failure is logged without retrying delivery or posting a room notice. Both Message-IDs are recorded for echo suppression before the copy is imported.
 
 Reaction deduplication retains the original Matrix emoji key, including its variation selectors. The stored reaction text and outgoing email use the normalized emoji; existing reactions keep their deduplication keys.
 

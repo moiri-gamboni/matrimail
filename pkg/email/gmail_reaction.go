@@ -11,6 +11,7 @@ import (
 	"net/mail"
 	"net/textproto"
 	"strings"
+	"time"
 
 	gomail "github.com/emersion/go-message/mail"
 	msgtextproto "github.com/emersion/go-message/textproto"
@@ -109,7 +110,17 @@ func BuildGmailReaction(target *gmail.Message, own mail.Address, emoji string) (
 	if name == "" {
 		name = own.Address
 	}
-	fallback := name + " reacted via Gmail: " + emoji
+	const gmailReactionURL = "https://www.google.com/gmail/about/?utm_source=gmail-in-product&utm_medium=et&utm_campaign=emojireactionemail#app"
+	parsed, err := ParseGmailAPIMessage(target, nil)
+	if err != nil {
+		return nil, err
+	}
+	quoteHTML := parsed.HTMLContent
+	if quoteHTML == "" {
+		quoteHTML = strings.ReplaceAll(html.EscapeString(parsed.TextContent), "\n", "<br>")
+	}
+	plainFallback := emoji + "\n\n" + name + " reacted via Gmail\n<" + gmailReactionURL + ">\n\n" + FormatGmailQuoteText(parsed.Date, parsed.Date.Location(), parsed.From, parsed.TextContent) + "\n"
+	htmlFallback := `<div><p style="font-size:50px;margin-top:0;margin-bottom:0">` + html.EscapeString(emoji) + `</p><p style="margin-top:10px;margin-bottom:0">` + html.EscapeString(name) + ` reacted via <a href="` + html.EscapeString(gmailReactionURL) + `">Gmail</a></p></div><br>` + FormatGmailQuoteHTML(parsed.Date, parsed.Date.Location(), parsed.From, quoteHTML)
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	payload, err := json.Marshal(struct {
@@ -120,9 +131,9 @@ func BuildGmailReaction(target *gmail.Message, own mail.Address, emoji string) (
 		return nil, err
 	}
 	for _, part := range []struct{ kind, content string }{
-		{"text/plain", fallback},
+		{"text/plain", plainFallback},
 		{"text/vnd.google.email-reaction+json", string(payload)},
-		{"text/html", "<p>" + html.EscapeString(fallback) + "</p>"},
+		{"text/html", htmlFallback},
 	} {
 		stream, err := writer.CreatePart(textproto.MIMEHeader{"Content-Type": {part.kind + "; charset=UTF-8"}, "Content-Transfer-Encoding": {"quoted-printable"}})
 		if err != nil {
@@ -155,6 +166,9 @@ func BuildGmailReaction(target *gmail.Message, own mail.Address, emoji string) (
 	header.SetAddressList("From", []*mail.Address{&own})
 	header.SetAddressList("To", destinations)
 	header.SetSubject(subject)
+	header.SetDate(time.Now())
+	_, domain, _ := strings.Cut(own.Address, "@")
+	header.Set("Message-ID", GenerateMessageID(domain))
 	header.Set("In-Reply-To", "<"+targetID+">")
 	references := parseReferencesHeader(headerValue(headers, "References"))
 	references = append(references, targetID)

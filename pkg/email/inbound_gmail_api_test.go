@@ -3,7 +3,10 @@ package email
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"maunium.net/go/mautrix/bridgev2"
+	"maunium.net/go/mautrix/bridgev2/database"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -604,5 +607,53 @@ func TestRun_RemembersSkipAcrossConservativeLabelCursor(t *testing.T) {
 	_ = g.Run(ctx)
 	if fmt.Sprint(saved) != "[110 120]" || notices != 1 {
 		t.Fatalf("saved=%v notices=%d", saved, notices)
+	}
+}
+
+type reactionEchoIDs map[string]bool
+
+func (ids reactionEchoIDs) IsOurMessage(_ context.Context, _ string, messageID string) (bool, error) {
+	return ids[messageID], nil
+}
+
+func TestGmailPollerSuppressesReactionSentAndImportedCopies(t *testing.T) {
+	f := &fakeGmail{
+		history:  map[string]string{"SENT": `{"historyId":"2","history":[{"id":"2","messagesAdded":[{"message":{"id":"original","threadId":"thread-1"}},{"message":{"id":"copy","threadId":"thread-1"}}]}]}`},
+		messages: map[string]string{},
+	}
+	for _, id := range []string{"original", "copy"} {
+		labels := []string{"SENT"}
+		if id == "original" {
+			labels = append(labels, "TRASH")
+		}
+		var message gmail.Message
+		if err := json.Unmarshal([]byte(gmailMessage(id, 1000, labels...)), &message); err != nil {
+			t.Fatal(err)
+		}
+		message.Payload.Headers = append(message.Payload.Headers, &gmail.MessagePartHeader{Name: "From", Value: "Sam <me@example.com>"})
+		encoded, _ := json.Marshal(&message)
+		f.messages[id] = string(encoded)
+	}
+	poller, _ := newTestPoller(t, f, "SENT")
+	log := zerolog.Nop()
+	processor := NewProcessor(&log, NewThreadManager(nil), false, "")
+	processor.SetDedupChecker(reactionEchoIDs{"original@example.com": true, "copy@example.com": true})
+	forwarded := 0
+	polled := 0
+	poller.OnMessage = func(ctx context.Context, message *gmail.Message, mailbox string) error {
+		polled++
+		parsed, err := ParseGmailAPIMessage(message, nil)
+		if err != nil {
+			return err
+		}
+		output, err := processor.ProcessParsedEmail(ctx, parsed, &bridgev2.UserLogin{UserLogin: &database.UserLogin{ID: "email:me@example.com"}}, mailbox)
+		if output != nil {
+			forwarded++
+		}
+		return err
+	}
+	cursor, err := poller.pollOnce(context.Background(), 1, &log)
+	if err != nil || cursor != 2 || polled != 2 || forwarded != 0 {
+		t.Fatalf("cursor=%d polled=%d forwarded=%d err=%v", cursor, polled, forwarded, err)
 	}
 }
