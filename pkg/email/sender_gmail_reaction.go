@@ -5,14 +5,15 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/rs/zerolog"
+	"net/mail"
 	"strings"
 
+	"github.com/rs/zerolog"
 	gmail "google.golang.org/api/gmail/v1"
 	"google.golang.org/api/option"
 )
 
-func (g *GmailAPISender) React(ctx context.Context, threadID, messageID, own, emoji string) (string, error) {
+func (g *GmailAPISender) React(ctx context.Context, threadID, messageID string, own mail.Address, emoji string) (string, error) {
 	if g.tokenSource == nil {
 		return "", errors.New("Gmail reactions require an authenticated Gmail account")
 	}
@@ -23,7 +24,7 @@ func (g *GmailAPISender) React(ctx context.Context, threadID, messageID, own, em
 	return sendGmailReaction(ctx, svc, threadID, messageID, own, emoji)
 }
 
-func sendGmailReaction(ctx context.Context, svc *gmail.Service, threadID, messageID, own, emoji string) (string, error) {
+func sendGmailReaction(ctx context.Context, svc *gmail.Service, threadID, messageID string, own mail.Address, emoji string) (string, error) {
 	if threadID == "" || messageID == "" {
 		return "", errors.New("reaction target has no Gmail thread or Message-ID")
 	}

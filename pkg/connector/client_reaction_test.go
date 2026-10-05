@@ -11,6 +11,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
+	"net/mail"
 	"strings"
 	"testing"
 	"time"
@@ -18,11 +19,12 @@ import (
 
 type reactionSender struct {
 	noopSender
-	calls                      int
-	thread, target, own, emoji string
+	calls                 int
+	thread, target, emoji string
+	own                   mail.Address
 }
 
-func (s *reactionSender) React(ctx context.Context, thread, target, own, emoji string) (string, error) {
+func (s *reactionSender) React(ctx context.Context, thread, target string, own mail.Address, emoji string) (string, error) {
 	s.calls++
 	s.thread = thread
 	s.target = target
@@ -41,19 +43,21 @@ func TestGmailReactionCapability(t *testing.T) {
 func TestMatrixReactionTargetsTheSelectedEmail(t *testing.T) {
 	sender := &reactionSender{}
 	tm := email.NewThreadManager(nil)
-	tm.CacheForReceiver("email:me@example.com", &email.EmailThread{ThreadID: "root", GmailThreadID: "gmail", MessageID: "latest@example.com"})
-	client := &EmailClient{Main: &EmailConnector{ThreadManager: tm}, UserLogin: &bridgev2.UserLogin{Bridge: &bridgev2.Bridge{DB: newTestDB(t)}, UserLogin: &database.UserLogin{ID: "email:me@example.com"}}, Email: "me@example.com", Sender: sender}
+	tm.CacheForReceiver("email:me@example.com", &email.EmailThread{ThreadID: "root", GmailThreadID: "gmail", MessageID: "latest@example.com", LastDeliveredTo: "me@example.com"})
+	client := &EmailClient{Main: &EmailConnector{ThreadManager: tm}, UserLogin: &bridgev2.UserLogin{Bridge: &bridgev2.Bridge{DB: newTestDB(t)}, UserLogin: &database.UserLogin{ID: "email:me@example.com"}}, Email: "me@example.com", SendAsAliases: []email.GmailSendAs{{Email: "me@example.com", Name: "Sam Example"}}, Sender: sender}
 	msg := &bridgev2.MatrixReaction{TargetMessage: &database.Message{ID: "email:selected@example.com"}}
 	msg.Portal = &bridgev2.Portal{Portal: &database.Portal{PortalKey: networkid.PortalKey{ID: "thread:root", Receiver: "email:me@example.com"}}}
-	msg.Content = &event.ReactionEventContent{RelatesTo: event.RelatesTo{Key: "✅"}}
+	msg.Content = &event.ReactionEventContent{RelatesTo: event.RelatesTo{Key: "✅\ufe0f"}}
 	pre, err := client.PreHandleMatrixReaction(context.Background(), msg)
-	if err != nil || pre.EmojiID != "✅" || pre.SenderID != "email:me@example.com" {
+	if err != nil || pre.EmojiID != "✅\ufe0f" || pre.Emoji != "✅" || pre.SenderID != "email:me@example.com" {
 		t.Fatalf("pre=%+v err=%v", pre, err)
 	}
-	if _, err := client.HandleMatrixReaction(context.Background(), msg); err != nil {
+	if reaction, err := client.HandleMatrixReaction(context.Background(), msg); err != nil {
 		t.Fatal(err)
+	} else if reaction.Emoji != "✅" {
+		t.Errorf("recorded emoji=%q", reaction.Emoji)
 	}
-	if sender.calls != 1 || sender.thread != "gmail" || sender.target != "selected@example.com" || sender.own != "me@example.com" || sender.emoji != "✅" {
+	if sender.own.Name != "Sam Example" || sender.calls != 1 || sender.thread != "gmail" || sender.target != "selected@example.com" || sender.own.Address != "me@example.com" || sender.emoji != "✅" {
 		t.Fatalf("reaction=%+v", sender)
 	}
 }
@@ -105,11 +109,11 @@ func TestSameEmojiOnEmailPartsSendsOneReaction(t *testing.T) {
 		}
 		msg := &bridgev2.MatrixReaction{TargetMessage: target}
 		msg.Portal = &bridgev2.Portal{Portal: &database.Portal{PortalKey: key}}
-		msg.Content = &event.ReactionEventContent{RelatesTo: event.RelatesTo{Key: "✅"}}
+		msg.Content = &event.ReactionEventContent{RelatesTo: event.RelatesTo{Key: "✅\ufe0f"}}
 		if _, err := client.HandleMatrixReaction(ctx, msg); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.Reaction.Upsert(ctx, &database.Reaction{BridgeID: testBridgeID, Room: key, MessageID: target.ID, MessagePartID: part, SenderID: "email:me@example.com", EmojiID: "✅", MXID: id.EventID("$reaction-" + part)}); err != nil {
+		if err := db.Reaction.Upsert(ctx, &database.Reaction{BridgeID: testBridgeID, Room: key, MessageID: target.ID, MessagePartID: part, SenderID: "email:me@example.com", EmojiID: "✅\ufe0f", MXID: id.EventID("$reaction-" + part)}); err != nil {
 			t.Fatal(err)
 		}
 	}

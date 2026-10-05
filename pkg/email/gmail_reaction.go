@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"mime/multipart"
+	"mime/quotedprintable"
 	"net/mail"
 	"net/textproto"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	msgtextproto "github.com/emersion/go-message/textproto"
 	"github.com/rivo/uniseg"
 	"go.mau.fi/util/emojirunes"
+	"go.mau.fi/util/variationselector"
 	gmail "google.golang.org/api/gmail/v1"
 )
 
@@ -40,7 +42,8 @@ func isSingleEmoji(s string) bool {
 	return visible > 0 && (regional == 0 || regional == 2)
 }
 
-func BuildGmailReaction(target *gmail.Message, own, emoji string) ([]byte, error) {
+func BuildGmailReaction(target *gmail.Message, own mail.Address, emoji string) ([]byte, error) {
+	emoji = variationselector.FullyQualify(emoji)
 	if !isSingleEmoji(emoji) {
 		return nil, errors.New("Gmail reactions require exactly one Unicode emoji")
 	}
@@ -78,7 +81,7 @@ func BuildGmailReaction(target *gmail.Message, own, emoji string) ([]byte, error
 	for _, addr := range append(to, cc...) {
 		recipients[strings.ToLower(addr.Address)] = true
 	}
-	if !recipients[strings.ToLower(own)] {
+	if !recipients[strings.ToLower(own.Address)] {
 		return nil, errors.New("Gmail reactions are unavailable for Bcc or group delivery")
 	}
 	if len(recipients) > 20 {
@@ -101,6 +104,12 @@ func BuildGmailReaction(target *gmail.Message, own, emoji string) ([]byte, error
 		return nil, errors.New("reaction target has no single valid Message-ID")
 	}
 	subject := strings.ReplaceAll(strings.ReplaceAll(headerValue(headers, "Subject"), "\r", ""), "\n", "")
+	subject = NormalizeReplySubject(subject)
+	name := own.Name
+	if name == "" {
+		name = own.Address
+	}
+	fallback := name + " reacted via Gmail: " + emoji
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	payload, err := json.Marshal(struct {
@@ -111,15 +120,19 @@ func BuildGmailReaction(target *gmail.Message, own, emoji string) ([]byte, error
 		return nil, err
 	}
 	for _, part := range []struct{ kind, content string }{
-		{"text/plain", own + " reacted via Gmail: " + emoji},
+		{"text/plain", fallback},
 		{"text/vnd.google.email-reaction+json", string(payload)},
-		{"text/html", "<p>" + html.EscapeString(own+" reacted via Gmail: "+emoji) + "</p>"},
+		{"text/html", "<p>" + html.EscapeString(fallback) + "</p>"},
 	} {
-		stream, err := writer.CreatePart(textproto.MIMEHeader{"Content-Type": {part.kind + "; charset=UTF-8"}, "Content-Transfer-Encoding": {"8bit"}})
+		stream, err := writer.CreatePart(textproto.MIMEHeader{"Content-Type": {part.kind + "; charset=UTF-8"}, "Content-Transfer-Encoding": {"quoted-printable"}})
 		if err != nil {
 			return nil, err
 		}
-		if _, err := stream.Write([]byte(part.content)); err != nil {
+		encoded := quotedprintable.NewWriter(stream)
+		if _, err := encoded.Write([]byte(part.content)); err != nil {
+			return nil, err
+		}
+		if err := encoded.Close(); err != nil {
 			return nil, err
 		}
 	}
@@ -128,7 +141,7 @@ func BuildGmailReaction(target *gmail.Message, own, emoji string) ([]byte, error
 	}
 	// Reply to the sender and the original visible recipients, excluding ourselves.
 	destinations := []*mail.Address{from[0]}
-	seen := map[string]bool{strings.ToLower(own): true, strings.ToLower(from[0].Address): true}
+	seen := map[string]bool{strings.ToLower(own.Address): true, strings.ToLower(from[0].Address): true}
 	for _, addr := range append(to, cc...) {
 		key := strings.ToLower(addr.Address)
 		if !seen[key] {
@@ -139,7 +152,7 @@ func BuildGmailReaction(target *gmail.Message, own, emoji string) ([]byte, error
 	var raw bytes.Buffer
 
 	var header gomail.Header
-	header.SetAddressList("From", []*mail.Address{{Address: own}})
+	header.SetAddressList("From", []*mail.Address{&own})
 	header.SetAddressList("To", destinations)
 	header.SetSubject(subject)
 	header.Set("In-Reply-To", "<"+targetID+">")

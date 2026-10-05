@@ -4,22 +4,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/mail"
+	"strings"
 
 	"github.com/Leicas/matrimail/pkg/common"
+	"go.mau.fi/util/variationselector"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 )
 
 type gmailReactor interface {
-	React(context.Context, string, string, string, string) (string, error)
+	React(context.Context, string, string, mail.Address, string) (string, error)
 }
 
 var _ bridgev2.ReactionHandlingNetworkAPI = (*EmailClient)(nil)
 
 func (ec *EmailClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (bridgev2.MatrixReactionPreResponse, error) {
+	// Matrix retries use the original key, so EmojiID must retain its variation selectors.
 	emoji := msg.Content.RelatesTo.Key
-	return bridgev2.MatrixReactionPreResponse{SenderID: MakeUserID(ec.Email), EmojiID: networkid.EmojiID(emoji), Emoji: emoji}, nil
+	return bridgev2.MatrixReactionPreResponse{SenderID: MakeUserID(ec.Email), EmojiID: networkid.EmojiID(emoji), Emoji: variationselector.FullyQualify(emoji)}, nil
 }
 
 func (ec *EmailClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (*database.Reaction, error) {
@@ -35,7 +39,7 @@ func (ec *EmailClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 			ec.UserLogin.Log.Warn().Err(err).Msg("Reaction sent but echo suppression could not be recorded")
 		}
 	}
-	return &database.Reaction{}, nil
+	return &database.Reaction{Emoji: variationselector.FullyQualify(msg.Content.RelatesTo.Key)}, nil
 }
 
 func (ec *EmailClient) sendReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (string, error) {
@@ -55,7 +59,12 @@ func (ec *EmailClient) sendReaction(ctx context.Context, msg *bridgev2.MatrixRea
 	if err != nil {
 		return "", err
 	}
-	return reactor.React(ctx, thread.GmailThreadID, common.MessageIDFromNetworkID(msg.TargetMessage.ID), ec.Email, msg.Content.RelatesTo.Key)
+	selves := map[string]bool{strings.ToLower(ec.Email): true}
+	for _, alias := range ec.SendAsAliases {
+		selves[strings.ToLower(alias.Email)] = true
+	}
+	fromAddr, fromName := pickFromAddress(ec, thread, selves)
+	return reactor.React(ctx, thread.GmailThreadID, common.MessageIDFromNetworkID(msg.TargetMessage.ID), mail.Address{Address: fromAddr, Name: fromName}, variationselector.FullyQualify(msg.Content.RelatesTo.Key))
 }
 
 func (ec *EmailClient) HandleMatrixReactionRemove(ctx context.Context, msg *bridgev2.MatrixReactionRemove) error {

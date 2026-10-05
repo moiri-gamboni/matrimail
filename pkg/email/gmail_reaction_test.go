@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime"
 	"mime/multipart"
+	"mime/quotedprintable"
 	"net/http"
 	"net/http/httptest"
 	"net/mail"
@@ -34,7 +35,7 @@ func reactionTarget(t *testing.T) *gmail.Message {
 
 func TestGmailReactionMIME(t *testing.T) {
 	target := reactionTarget(t)
-	raw, err := BuildGmailReaction(target, "sam@example.com", "👍🏽")
+	raw, err := BuildGmailReaction(target, mail.Address{Address: "sam@example.com"}, "👍🏽")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +99,7 @@ func TestGmailReactionRefusals(t *testing.T) {
 				value = value[:len(value)-1]
 			}
 			target.Payload.Headers = append(headers, &gmail.MessagePartHeader{Name: tc.header, Value: value})
-			if _, err := BuildGmailReaction(target, "sam@example.com", "✅"); err == nil {
+			if _, err := BuildGmailReaction(target, mail.Address{Address: "sam@example.com"}, "✅"); err == nil {
 				t.Fatal("unsafe reaction accepted")
 			}
 		})
@@ -107,12 +108,12 @@ func TestGmailReactionRefusals(t *testing.T) {
 
 func TestGmailReactionRequiresOneEmoji(t *testing.T) {
 	for _, value := range []string{"👍", "✅", "✅\ufe0f", "👨‍👩‍👧‍👦", "🇨🇭", "1️⃣", "#️⃣", "👍🏽", "❤", "❤\ufe0f", "🫨"} {
-		if _, err := BuildGmailReaction(reactionTarget(t), "sam@example.com", value); err != nil {
+		if _, err := BuildGmailReaction(reactionTarget(t), mail.Address{Address: "sam@example.com"}, value); err != nil {
 			t.Errorf("%s: %v", value, err)
 		}
 	}
 	for _, value := range []string{"", "ok", "hello", "👍👍", "✅✅", "👍🏽✅", "\u200d", "🇨", "\ufe0f", "1", ":thumbsup:", "mxc://example.org/custom"} {
-		if _, err := BuildGmailReaction(reactionTarget(t), "sam@example.com", value); err == nil {
+		if _, err := BuildGmailReaction(reactionTarget(t), mail.Address{Address: "sam@example.com"}, value); err == nil {
 			t.Errorf("accepted %q", value)
 		}
 	}
@@ -167,7 +168,7 @@ func TestGmailReactionSendsOnceInTargetThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mid, err := sendGmailReaction(context.Background(), svc, target.ThreadId, cleanMessageID(headerValue(target.Payload.Headers, "Message-ID")), "sam@example.com", "✅")
+	mid, err := sendGmailReaction(context.Background(), svc, target.ThreadId, cleanMessageID(headerValue(target.Payload.Headers, "Message-ID")), mail.Address{Address: "sam@example.com"}, "✅")
 	if err != nil || mid != "reaction@example.com" || sends != 1 {
 		t.Fatalf("mid=%q sends=%d err=%v", mid, sends, err)
 	}
@@ -184,7 +185,7 @@ func TestGmailReactionEncodesHeadersAndPreservesReferences(t *testing.T) {
 		}
 	}
 	target.Payload.Headers = append(target.Payload.Headers, &gmail.MessagePartHeader{Name: "References", Value: "<root@example.com> <parent@example.com>"})
-	raw, err := BuildGmailReaction(target, "sam@example.com", "✅")
+	raw, err := BuildGmailReaction(target, mail.Address{Address: "sam@example.com"}, "✅")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +198,7 @@ func TestGmailReactionEncodesHeadersAndPreservesReferences(t *testing.T) {
 		t.Errorf("references=%q want=%q", msg.Header.Get("References"), want)
 	}
 	subject, err := (&mime.WordDecoder{}).DecodeHeader(msg.Header.Get("Subject"))
-	if err != nil || subject != "Réunion à Zürich" {
+	if err != nil || subject != "Re: Réunion à Zürich" {
 		t.Fatalf("subject=%q err=%v", subject, err)
 	}
 	for _, name := range []string{"Subject", "From", "To"} {
@@ -211,5 +212,113 @@ func TestGmailReactionEncodesHeadersAndPreservesReferences(t *testing.T) {
 	addresses, err := msg.Header.AddressList("To")
 	if err != nil || len(addresses) != 1 || addresses[0].Name != "Élise" || addresses[0].Address != "elise@example.com" {
 		t.Fatalf("to=%v err=%v", addresses, err)
+	}
+}
+
+func TestGmailReactionQualifiesEmojiInAllParts(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"✅\ufe0f", "✅"}, {"❤", "❤️"}, {"👩\u200d❤\u200d👩", "👩\u200d❤️\u200d👩"}, {"☝\ufe0f🏽", "☝🏽"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			raw, err := BuildGmailReaction(reactionTarget(t), mail.Address{Address: "sam@example.com"}, tc.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			msg, err := mail.ReadMessage(bytes.NewReader(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader := multipart.NewReader(msg.Body, params["boundary"])
+			for _, kind := range []string{"text/plain", "text/vnd.google.email-reaction+json", "text/html"} {
+				part, err := reader.NextPart()
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, err := io.ReadAll(part)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if kind == "text/vnd.google.email-reaction+json" {
+					var reaction struct{ Emoji string }
+					if err := json.Unmarshal(body, &reaction); err != nil {
+						t.Fatal(err)
+					}
+					if reaction.Emoji != tc.want {
+						t.Errorf("payload emoji = %q, want %q", reaction.Emoji, tc.want)
+					}
+				} else {
+					want := "sam@example.com reacted via Gmail: " + tc.want
+					if kind == "text/html" {
+						want = "<p>" + want + "</p>"
+					}
+					if string(body) != want {
+						t.Errorf("fallback = %q, want %q", body, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestGmailReactionSubjectIsAReply(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{{"Test", "Re: Test"}, {"rE: Test", "Re: Test"}, {"Re: Re: Test", "Re: Test"}} {
+		target := reactionTarget(t)
+		for _, h := range target.Payload.Headers {
+			if h.Name == "Subject" {
+				h.Value = tc.input
+			}
+		}
+		raw, err := BuildGmailReaction(target, mail.Address{Address: "sam@example.com"}, "✅")
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := mail.ReadMessage(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		subject, err := (&mime.WordDecoder{}).DecodeHeader(msg.Header.Get("Subject"))
+		if err != nil || subject != tc.want {
+			t.Errorf("subject=%q, want %q, err=%v", subject, tc.want, err)
+		}
+	}
+}
+
+func TestGmailReactionUsesNamedFromAndQuotedPrintableFallback(t *testing.T) {
+	raw, err := BuildGmailReaction(reactionTarget(t), mail.Address{Name: "Émile & Sam", Address: "sam@example.com"}, "✅\ufe0f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	from, err := msg.Header.AddressList("From")
+	if err != nil || len(from) != 1 || from[0].Name != "Émile & Sam" || from[0].Address != "sam@example.com" {
+		t.Errorf("from=%v, err=%v", from, err)
+	}
+	_, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := multipart.NewReader(msg.Body, params["boundary"])
+	for _, want := range []string{"Émile & Sam reacted via Gmail: ✅", `{"version":1,"emoji":"✅"}`, "<p>Émile &amp; Sam reacted via Gmail: ✅</p>"} {
+		part, err := reader.NextRawPart()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if part.Header.Get("Content-Transfer-Encoding") != "quoted-printable" {
+			t.Error("part is not quoted-printable")
+		}
+		body, err := io.ReadAll(quotedprintable.NewReader(part))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(body) != want {
+			t.Errorf("decoded body = %q, want %q", body, want)
+		}
 	}
 }
