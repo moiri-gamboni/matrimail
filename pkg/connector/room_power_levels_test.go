@@ -216,6 +216,11 @@ func TestStartupReadsFreshStateWhenCachedPowerLevelsAreEmpty(t *testing.T) {
 	if !strings.Contains(output.String(), `"updated":0,"already_ok":2,"failed":0`) {
 		t.Errorf("missing already-ok count: %s", output)
 	}
+	for _, line := range strings.Split(output.String(), "\n") {
+		if strings.Contains(line, "refresh decision") && !strings.Contains(line, `"level":"debug"`) {
+			t.Errorf("unchanged room decision not at debug level: %s", line)
+		}
+	}
 }
 
 func TestStartupRejectsIncompleteOrInvalidFreshPowerLevels(t *testing.T) {
@@ -283,5 +288,10 @@ func TestStartupFreshStateBypassesSQLNullPowerLevels(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), `"bot_level":9001,"human_level":0`) || !strings.Contains(output.String(), `"reaction_level":101,"events_default":0,"changed":true`) {
 		t.Errorf("missing decision fields: %s", output)
+	}
+	for _, line := range strings.Split(output.String(), "\n") {
+		if strings.Contains(line, "refresh decision") && strings.Contains(line, `"changed":true`) && !strings.Contains(line, `"level":"info"`) {
+			t.Errorf("changed room decision not at info level: %s", line)
+		}
 	}
 }

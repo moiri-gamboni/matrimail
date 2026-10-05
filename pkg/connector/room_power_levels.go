@@ -53,7 +53,12 @@ func (ec *EmailConnector) refreshRoomPowerLevels(ctx context.Context) {
 		power := current.Clone()
 		overrides := matrix.BuildReadOnlyPowerLevels()
 		changed := overrides.Apply(botID, power)
-		log.Info().Int("bot_level", botLevel).Int("human_level", humanLevel).
+		// Rooms already in shape are the steady state; only a change is worth an info line.
+		decision := log.Debug()
+		if changed {
+			decision = log.Info()
+		}
+		decision.Int("bot_level", botLevel).Int("human_level", humanLevel).
 			Int("users_default", current.UsersDefault).
 			Int("reaction_level", current.GetEventLevel(event.EventReaction)).Int("events_default", current.EventsDefault).
 			Bool("changed", changed).Msg("Email room power level refresh decision")
