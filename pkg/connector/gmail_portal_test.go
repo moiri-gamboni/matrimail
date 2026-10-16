@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"github.com/rs/zerolog"
+	"maps"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -34,12 +35,9 @@ func TestGmailPortalResolverAndSyncUseOldestRoom(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	resolve := gmailThreadForChat(db, testLoginID)
-	for room, want := range map[string]string{"!old:example.com": "gmail", "!new:example.com": ""} {
-		got, err := resolve(ctx, room)
-		if err != nil || got != want {
-			t.Errorf("%s: got %q, %v want %q", room, got, err, want)
-		}
+	threads, err := gmailChatThreads(db, testLoginID)(ctx)
+	if want := map[string]string{"!old:example.com": "gmail"}; err != nil || !maps.Equal(threads, want) {
+		t.Errorf("chat threads: got %v, %v want %v", threads, err, want)
 	}
 	log := zerolog.Nop()
 	r := &DBThreadMetadataResolver{Bridge: &bridgev2.Bridge{DB: db}, Log: &log}
@@ -59,5 +57,8 @@ func TestGmailPortalResolverPropagatesDatabaseError(t *testing.T) {
 	got, found, err := r.ResolveGmailThreadID(testLoginID, "gmail")
 	if err == nil || found || got != "" {
 		t.Fatalf("lookup: got=%q found=%v error=%v", got, found, err)
+	}
+	if threads, err := gmailChatThreads(db, testLoginID)(context.Background()); err == nil {
+		t.Fatalf("chat threads: got %v with no error", threads)
 	}
 }

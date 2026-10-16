@@ -105,12 +105,12 @@ func (m *GmailInboundManager) Start(ctx context.Context, login *bridgev2.UserLog
 	if cfg := m.connector.Config.BeeperSync; cfg.APIURL != "" {
 		syncLog := m.connector.Bridge.Log.With().Str("component", "beeper_sync").Str("email", emailAddr).Logger()
 		syncer := &beeperSyncer{
-			loginID:       string(login.ID),
-			beeper:        &beeper.Client{BaseURL: cfg.APIURL, TokenFile: cfg.TokenFile, HTTP: &http.Client{Timeout: 30 * time.Second}, Log: &syncLog},
-			gmail:         email.NewGmailThreads(ts, &syncLog),
-			store:         m.connector.BeeperSync,
-			threadForChat: gmailThreadForChat(m.connector.Bridge.DB, string(login.ID)),
-			log:           &syncLog,
+			loginID:     string(login.ID),
+			beeper:      &beeper.Client{BaseURL: cfg.APIURL, TokenFile: cfg.TokenFile, HTTP: &http.Client{Timeout: 30 * time.Second}, Log: &syncLog},
+			gmail:       email.NewGmailThreads(ts, &syncLog),
+			store:       m.connector.BeeperSync,
+			chatThreads: gmailChatThreads(m.connector.Bridge.DB, string(login.ID)),
+			log:         &syncLog,
 		}
 		poller.OnThreadsChanged = syncer.gmailThreadsChanged
 		go syncer.run(runnerCtx, cfg.Interval())

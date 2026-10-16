@@ -9,7 +9,6 @@ import (
 	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
-	"maunium.net/go/mautrix/id"
 
 	"github.com/Leicas/matrimail/pkg/beeper"
 	"github.com/Leicas/matrimail/pkg/email"
@@ -37,10 +36,10 @@ type beeperSyncer struct {
 	beeper  *beeper.Client
 	gmail   *email.GmailThreads
 	store   *BeeperSyncQuery
-	// threadForChat returns the Gmail thread a chat mirrors, or "" when it
-	// mirrors none of this login's.
-	threadForChat func(ctx context.Context, chatID string) (string, error)
-	log           *zerolog.Logger
+	// chatThreads maps each chat that mirrors one of this login's Gmail
+	// threads to that thread. It reads every portal, so it runs once a tick.
+	chatThreads func(ctx context.Context) (map[string]string, error)
+	log         *zerolog.Logger
 
 	// mu serialises syncing one thread with recording Gmail changes, so a
 	// change reported while a thread is being synced is not cleared by the
@@ -107,13 +106,21 @@ func (s *beeperSyncer) listChats(ctx context.Context) ([]beeper.Chat, error) {
 	return s.beeper.ListChats(ctx, s.accountID)
 }
 
-// syncChats syncs each chat. A chat that fails is skipped so the rest still
-// sync; the first failure is returned.
+// syncChats syncs each chat that mirrors a Gmail thread. A chat that fails is
+// skipped so the rest still sync; the first failure is returned.
 func (s *beeperSyncer) syncChats(ctx context.Context, chats []beeper.Chat) error {
+	threads, err := s.chatThreads(ctx)
+	if err != nil {
+		return fmt.Errorf("map chats to Gmail threads: %w", err)
+	}
 	var failed int
 	var firstErr error
 	for _, chat := range chats {
-		if err := s.syncChat(ctx, chat); err != nil {
+		threadID := threads[chat.ID]
+		if threadID == "" {
+			continue
+		}
+		if err := s.syncChat(ctx, chat, threadID); err != nil {
 			s.log.Debug().Err(err).Str("chat_id", chat.ID).Msg("Beeper state sync: chat not synced")
 			failed++
 			if firstErr == nil {
@@ -127,11 +134,7 @@ func (s *beeperSyncer) syncChats(ctx context.Context, chats []beeper.Chat) error
 	return nil
 }
 
-func (s *beeperSyncer) syncChat(ctx context.Context, chat beeper.Chat) error {
-	threadID, err := s.threadForChat(ctx, chat.ID)
-	if err != nil || threadID == "" {
-		return err
-	}
+func (s *beeperSyncer) syncChat(ctx context.Context, chat beeper.Chat, threadID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -224,29 +227,20 @@ func (s *beeperSyncer) gmailThreadsChanged(ctx context.Context, threadIDs []stri
 	return nil
 }
 
-// gmailThreadForChat maps a chat to the Gmail thread its portal holds. The
-// chat ID is the portal's Matrix room ID. Chats of another login, and rooms
-// with no Gmail thread yet (a compose draft before its first send), map to "".
-func gmailThreadForChat(db *database.Database, loginID string) func(ctx context.Context, chatID string) (string, error) {
-	return func(ctx context.Context, chatID string) (string, error) {
-		portal, err := db.Portal.GetByMXID(ctx, id.RoomID(chatID))
-		if err != nil || portal == nil || portal.Receiver != networkid.UserLoginID(loginID) {
-			return "", err
-		}
-		pm, _ := portal.Metadata.(*PortalMetadata)
-		if pm == nil {
-			return "", nil
-		}
-		if pm.GmailThreadID == "" {
-			return "", nil
-		}
-		primary, err := primaryGmailPortal(ctx, db, portal.Receiver, pm.GmailThreadID)
+// gmailChatThreads maps each chat to the Gmail thread its portal holds. The
+// chat ID is the portal's Matrix room ID. Chats of another login, rooms with no
+// Gmail thread yet (a compose draft before its first send) and rooms a thread
+// was split from are left out.
+func gmailChatThreads(db *database.Database, loginID string) func(ctx context.Context) (map[string]string, error) {
+	return func(ctx context.Context) (map[string]string, error) {
+		primaries, err := primaryGmailPortals(ctx, db, networkid.UserLoginID(loginID))
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		if primary == nil || primary.PortalKey != portal.PortalKey {
-			return "", nil
+		threads := make(map[string]string, len(primaries))
+		for gmailID, portal := range primaries {
+			threads[string(portal.MXID)] = gmailID
 		}
-		return pm.GmailThreadID, nil
+		return threads, nil
 	}
 }

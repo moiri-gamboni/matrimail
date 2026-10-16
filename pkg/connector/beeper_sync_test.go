@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -309,6 +310,8 @@ type syncFixture struct {
 	store  *BeeperSyncQuery
 	syncer *beeperSyncer
 	logs   *bytes.Buffer
+	// threadLookups counts the syncer's calls to map its chats to threads.
+	threadLookups int
 }
 
 // newSyncFixture wires a syncer to fresh fakes. rooms maps each Beeper room
@@ -335,17 +338,19 @@ func newSyncFixture(t *testing.T, rooms map[string]string) *syncFixture {
 	}
 	threads := email.NewGmailThreads(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test"}), &log,
 		option.WithEndpoint(gsrv.URL+"/"))
-	s := &beeperSyncer{
+	f := &syncFixture{beeper: fb, gmail: fg, store: store, logs: logs}
+	f.syncer = &beeperSyncer{
 		loginID: testLoginID,
 		beeper:  &beeper.Client{BaseURL: bsrv.URL, TokenFile: tokenFile, HTTP: bsrv.Client(), Log: &log},
 		gmail:   threads,
 		store:   store,
-		threadForChat: func(ctx context.Context, chatID string) (string, error) {
-			return rooms[chatID], nil
+		chatThreads: func(ctx context.Context) (map[string]string, error) {
+			f.threadLookups++
+			return rooms, nil
 		},
 		log: &log,
 	}
-	return &syncFixture{beeper: fb, gmail: fg, store: store, syncer: s, logs: logs}
+	return f
 }
 
 // tryTick lists and syncs every chat once, as runTick does, returning the
@@ -582,6 +587,29 @@ func TestBeeperSync_SkipsChatsWithoutAGmailThread(t *testing.T) {
 	eq(t, "Beeper writes", f.beeper.takeWrites(), []string{"!r:beeper.local read"})
 }
 
+// The chats are traced to their Gmail threads once per tick, not once per
+// chat: tracing reads every portal's metadata, and doing that for each chat
+// made a tick on a mailbox of a few hundred threads outlast its interval.
+func TestBeeperSync_TracesChatsToThreadsOncePerTick(t *testing.T) {
+	t.Parallel()
+	rooms := map[string]string{"!a:beeper.local": "t-a", "!b:beeper.local": "t-b", "!c:beeper.local": "t-c"}
+	f := newSyncFixture(t, rooms)
+	for room := range rooms {
+		f.beeper.add(room, fakeBeeperChat{})
+	}
+
+	f.tick(t)
+
+	if f.threadLookups != 1 {
+		t.Errorf("chats traced to threads %d times in one tick of %d chats; want once", f.threadLookups, len(rooms))
+	}
+	for _, thread := range rooms {
+		if f.synced(t, thread) == nil {
+			t.Errorf("thread %s not synced", thread)
+		}
+	}
+}
+
 // The poller reports every thread whose labels moved, most of them never
 // bridged; only threads already synced are marked.
 func TestBeeperSync_GmailChangesToUnsyncedThreadsAreIgnored(t *testing.T) {
@@ -634,7 +662,7 @@ func TestBeeperSync_OutageIsLoggedOncePerEpisode(t *testing.T) {
 
 // A chat is traced to its Gmail thread through the portal the bridge created
 // for its room, and only for the login that owns the portal.
-func TestGmailThreadForChat(t *testing.T) {
+func TestGmailChatThreads(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -653,17 +681,9 @@ func TestGmailThreadForChat(t *testing.T) {
 	insert("!theirs:example.com", "email:other@example.com", "t-theirs")
 	insert("!draft:example.com", testLoginID, "")
 
-	resolve := gmailThreadForChat(db, testLoginID)
-	for room, want := range map[string]string{
-		"!mine:example.com":    "t-mine",
-		"!theirs:example.com":  "",
-		"!draft:example.com":   "",
-		"!unknown:example.com": "",
-	} {
-		got, err := resolve(ctx, room)
-		if err != nil || got != want {
-			t.Errorf("gmailThreadForChat(%s) = %q, %v; want %q", room, got, err, want)
-		}
+	got, err := gmailChatThreads(db, testLoginID)(ctx)
+	if want := map[string]string{"!mine:example.com": "t-mine"}; err != nil || !maps.Equal(got, want) {
+		t.Errorf("gmailChatThreads = %v, %v; want %v", got, err, want)
 	}
 }
 
